@@ -1,0 +1,49 @@
+year,make,model,drive_type,fuel_type,vehicle_class,engine_description,transmission,city_mpg,highway_mpg,combined_mpg,range_miles,battery_capacity_kwh,charge_time_240v,msrp_base,co2_emissions,ghg_score
+2019,Tesla,Model 3,RWD,Electric,Midsize Cars,Electric Motor,Automatic (variable gear ratios),131,118,124,263,60.0,8.3,53879,0,10
+2020,Tesla,Model 3,RWD,Electric,Midsize Cars,Electric Motor,Automatic (variable gear ratios),141,127,134,262,60.0,8.3,48954,0,10
+2021,Tesla,Model 3,RWD,Electric,Midsize Cars,Electric Motor,Automatic (variable gear ratios),135,121,128,287,60.0,8.3,39838,0,10
+2022,Tesla,Model 3,RWD,Electric,Midsize Cars,Electric Motor,Automatic (variable gear ratios),141,127,134,295,60.0,8.3,54530,0,10
+2023,Tesla,Model 3,RWD,Electric,Midsize Cars,Electric Motor,Automatic (variable gear ratios),150,135,142,302,60.0,8.3,44284,0,10
+2024,Tesla,Model 3,RWD,Electric,Midsize Cars,Electric Motor,Automatic (variable gear ratios),146,131,138,306,60.0,8.3,47640,0,10
+2019,Tesla,Model Y,AWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),118,106,112,316,75.0,10.4,48586,0,10
+2020,Tesla,Model Y,AWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),126,114,120,340,75.0,10.4,45528,0,10
+2021,Tesla,Model Y,AWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),124,112,118,345,75.0,10.4,54349,0,10
+2022,Tesla,Model Y,AWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),138,124,131,323,75.0,10.4,50157,0,10
+2023,Tesla,Model Y,AWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),142,128,135,387,75.0,10.4,49551,0,10
+2024,Tesla,Model Y,AWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),142,128,135,383,75.0,10.4,45208,0,10
+2019,Ford,Mustang Mach-E,RWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),104,93,98,334,88.0,12.2,45554,0,10
+2020,Ford,Mustang Mach-E,RWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),106,95,101,316,88.0,12.2,57647,0,10
+2021,Ford,Mustang Mach-E,RWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),108,97,102,322,88.0,12.2,57728,0,10
+2022,Ford,Mustang Mach-E,RWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),113,101,107,373,88.0,12.2,47666,0,10
+2023,Ford,Mustang Mach-E,RWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),116,104,110,369,88.0,12.2,49509,0,10
+2024,Ford,Mustang Mach-E,RWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),122,110,116,355,88.0,12.2,52791,0,10
+2019,Chevrolet,Bolt EUV,FWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),118,106,112,237,65.0,9.0,42713,0,10
+2020,Chevrolet,Bolt EUV,FWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),122,110,116,282,65.0,9.0,52185,0,10
+2021,Chevrolet,Bolt EUV,FWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),128,116,122,259,65.0,9.0,51840,0,10
+2022,Chevrolet,Bolt EUV,FWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),138,124,131,270,65.0,9.0,46940,0,10
+2023,Chevrolet,Bolt EUV,FWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),135,121,128,295,65.0,9.0,48338,0,10
+2024,Chevrolet,Bolt EUV,FWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),135,122,129,283,65.0,9.0,56832,0,10
+2019,BMW,iX,AWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),84,76,80,330,105.2,14.6,59943,0,10
+2020,BMW,iX,AWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),85,77,81,325,105.2,14.6,45049,0,10
+2021,BMW,iX,AWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),91,82,87,354,105.2,14.6,52558,0,10
+2022,BMW,iX,AWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),90,81,86,328,105.2,14.6,53792,0,10
+2023,BMW,iX,AWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),92,83,88,328,105.2,14.6,46416,0,10
+2024,BMW,iX,AWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),93,83,88,387,105.2,14.6,60622,0,10
+2019,Hyundai,Ioniq 5,RWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),122,110,116,305,77.4,10.8,56488,0,10
+2020,Hyundai,Ioniq 5,RWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),122,110,116,322,77.4,10.8,54770,0,10
+2021,Hyundai,Ioniq 5,RWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),120,108,114,349,77.4,10.8,54625,0,10
+2022,Hyundai,Ioniq 5,RWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),124,111,117,329,77.4,10.8,48884,0,10
+2023,Hyundai,Ioniq 5,RWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),127,115,121,358,77.4,10.8,50096,0,10
+2024,Hyundai,Ioniq 5,RWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),128,115,121,372,77.4,10.8,49556,0,10
+2019,Rivian,R1T,AWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),67,61,64,323,135.0,18.8,44043,0,10
+2020,Rivian,R1T,AWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),70,63,67,318,135.0,18.8,44558,0,10
+2021,Rivian,R1T,AWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),73,66,69,330,135.0,18.8,42688,0,10
+2022,Rivian,R1T,AWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),74,67,71,384,135.0,18.8,51743,0,10
+2023,Rivian,R1T,AWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),81,72,77,370,135.0,18.8,45158,0,10
+2024,Rivian,R1T,AWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),78,70,74,363,135.0,18.8,48054,0,10
+2019,Rivian,R1S,AWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),69,62,65,306,135.0,18.8,46116,0,10
+2020,Rivian,R1S,AWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),69,62,66,333,135.0,18.8,47645,0,10
+2021,Rivian,R1S,AWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),73,65,69,327,135.0,18.8,50346,0,10
+2022,Rivian,R1S,AWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),77,69,73,338,135.0,18.8,53155,0,10
+2023,Rivian,R1S,AWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),83,74,79,356,135.0,18.8,44834,0,10
+2024,Rivian,R1S,AWD,Electric,Small SUV,Electric Motor,Automatic (variable gear ratios),75,68,72,364,135.0,18.8,45423,0,10

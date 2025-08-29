@@ -1,0 +1,101 @@
+{
+  "generation_date": "2025-08-29T00:27:40.438500",
+  "data_sources": {
+    "charging_stations": "NREL Alternative Fuel Data Center API (Real Data)",
+    "vehicles": "Generated realistic data based on EPA specifications",
+    "sales": "Generated realistic trend data"
+  },
+  "datasets": {
+    "epa_vehicles": {
+      "records": 48,
+      "years_covered": "2019-2024",
+      "unique_models": 8,
+      "columns": [
+        "year",
+        "make",
+        "model",
+        "drive_type",
+        "fuel_type",
+        "vehicle_class",
+        "engine_description",
+        "transmission",
+        "city_mpg",
+        "highway_mpg",
+        "combined_mpg",
+        "range_miles",
+        "battery_capacity_kwh",
+        "charge_time_240v",
+        "msrp_base",
+        "co2_emissions",
+        "ghg_score"
+      ]
+    },
+    "charging_stations": {
+      "records": 19915,
+      "unique_cities": 825,
+      "total_connectors": {
+        "level1": 664,
+        "level2": 53326,
+        "dc_fast": 16667
+      },
+      "top_networks": {
+        "ChargePoint Network": 12818,
+        "Non-Networked": 1471,
+        "Tesla Destination": 953,
+        "Tesla": 584,
+        "Blink Network": 581
+      },
+      "columns": [
+        "station_name",
+        "street_address",
+        "city",
+        "state",
+        "zip_code",
+        "latitude",
+        "longitude",
+        "access_code",
+        "facility_type",
+        "network",
+        "connector_types",
+        "level1_count",
+        "level2_count",
+        "dc_fast_count",
+        "pricing",
+        "hours",
+        "date_last_confirmed",
+        "updated_at",
+        "station_phone",
+        "owner_type",
+        "federal_agency",
+        "open_date",
+        "cards_accepted",
+        "bd_blends",
+        "groups_with_access_code",
+        "hydrogen_standards",
+        "maximum_vehicle_class",
+        "country",
+        "intersection_directions",
+        "plus4"
+      ]
+    },
+    "ev_sales": {
+      "records": 80,
+      "date_range": "2019-01-01 to 2025-08-01",
+      "total_sales": 470089,
+      "columns": [
+        "date",
+        "year",
+        "month",
+        "month_name",
+        "quarter",
+        "total_ev_sales",
+        "tesla_sales",
+        "other_premium_sales",
+        "mass_market_sales",
+        "market_share_percent",
+        "avg_price",
+        "incentives_total"
+      ]
+    }
+  }
+}

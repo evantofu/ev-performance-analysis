@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Improved EV Performance Analysis Data Collection
-Generates robust sample data for analysis
+EV Performance Analysis Data Collection - API Only Version
+Only uses real API data, no fallback sample data
 """
 
 import pandas as pd
@@ -22,6 +22,14 @@ class EVDataCollector:
         self.data_dir = Path('data/raw')
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.timestamp = datetime.now().strftime('%Y%m%d')
+        
+        # Check for API key
+        self.nrel_api_key = os.getenv('NREL_API_KEY')
+        if not self.nrel_api_key:
+            logger.error("NREL_API_KEY environment variable not set!")
+            logger.error("Please get a free API key from https://developer.nrel.gov/signup/")
+            logger.error("Then set it as an environment variable: export NREL_API_KEY='your_key_here'")
+            raise ValueError("NREL API key is required")
         
     def create_epa_vehicles_data(self):
         """Create comprehensive EPA vehicle efficiency data"""
@@ -102,145 +110,104 @@ class EVDataCollector:
         filename = f'epa_vehicles_{self.timestamp}.csv'
         filepath = self.data_dir / filename
         vehicles_df.to_csv(filepath, index=False)
-        logger.info(f"✅ Created {filename} with {len(vehicles_df)} records")
+        logger.info(f"Created {filename} with {len(vehicles_df)} records")
         
         return vehicles_df
     
     def get_charging_stations_data(self):
-        """Get real NREL charging station data for California"""
-        logger.info("Fetching NREL charging stations data...")
+        """Get real NREL charging station data for California - API ONLY"""
+        logger.info("Fetching NREL charging stations data (API only)...")
+        
+        # NREL Alternative Fuel Data Center API
+        url = "https://developer.nrel.gov/api/alt-fuel-stations/v1.json"
+        params = {
+            'fuel_type': 'ELEC',
+            'state': 'CA',
+            'limit': 'all',
+            'format': 'json',
+            'api_key': self.nrel_api_key
+        }
+        
+        logger.info(f"Making API request to: {url}")
+        logger.info(f"Parameters: {dict(params)}")  # Don't log the actual API key
+        params_log = params.copy()
+        params_log['api_key'] = '***REDACTED***'
+        logger.info(f"API parameters: {params_log}")
         
         try:
-            # NREL Alternative Fuel Data Center API
-            url = "https://developer.nrel.gov/api/alt-fuel-stations/v1.json"
-            params = {
-                'fuel_type': 'ELEC',
-                'state': 'CA',
-                'limit': 'all',
-                'format': 'json'
-            }
-            
-            response = requests.get(url, params=params, timeout=30)
+            response = requests.get(url, params=params, timeout=60)  # Increased timeout
+            logger.info(f"API response status code: {response.status_code}")
             
             if response.status_code == 200:
                 data = response.json()
                 stations = data.get('fuel_stations', [])
+                logger.info(f"Retrieved {len(stations)} stations from API")
                 
-                if stations:
-                    # Process the real data
-                    stations_data = []
-                    for station in stations[:20000]:  # Limit to avoid memory issues
-                        stations_data.append({
-                            'station_name': station.get('station_name', 'Unknown'),
-                            'street_address': station.get('street_address', ''),
-                            'city': station.get('city', ''),
-                            'state': station.get('state', ''),
-                            'zip_code': station.get('zip', ''),
-                            'latitude': station.get('latitude', 0),
-                            'longitude': station.get('longitude', 0),
-                            'access_code': station.get('access_code', 'Unknown'),
-                            'facility_type': station.get('facility_type', 'Unknown'),
-                            'network': station.get('ev_network', 'Unknown'),
-                            'connector_types': station.get('ev_connector_types', ''),
-                            'level1_count': station.get('ev_level1_evse_num', 0) or 0,
-                            'level2_count': station.get('ev_level2_evse_num', 0) or 0,
-                            'dc_fast_count': station.get('ev_dc_fast_num', 0) or 0,
-                            'pricing': station.get('ev_pricing', 'Unknown'),
-                            'hours': station.get('access_days_time', 'Unknown'),
-                            'date_last_confirmed': station.get('date_last_confirmed', ''),
-                            'updated_at': station.get('updated_at', '')
-                        })
-                    
-                    stations_df = pd.DataFrame(stations_data)
-                    filename = f'charging_stations_CA_{self.timestamp}.csv'
-                    filepath = self.data_dir / filename
-                    stations_df.to_csv(filepath, index=False)
-                    logger.info(f"✅ Created {filename} with {len(stations_df)} real charging stations")
-                    return stations_df
-            
-        except Exception as e:
-            logger.warning(f"NREL API error: {e}. Creating sample data instead.")
-        
-        # Fallback: Create realistic sample charging station data
-        return self.create_sample_charging_stations()
-    
-    def create_sample_charging_stations(self):
-        """Create realistic sample charging station data for California"""
-        logger.info("Creating sample charging stations data...")
-        
-        # California major cities with approximate coordinates
-        ca_cities = [
-            {'city': 'Los Angeles', 'lat': 34.0522, 'lon': -118.2437, 'weight': 0.3},
-            {'city': 'San Francisco', 'lat': 37.7749, 'lon': -122.4194, 'weight': 0.15},
-            {'city': 'San Diego', 'lat': 32.7157, 'lon': -117.1611, 'weight': 0.12},
-            {'city': 'San Jose', 'lat': 37.3382, 'lon': -121.8863, 'weight': 0.08},
-            {'city': 'Sacramento', 'lat': 38.5816, 'lon': -121.4944, 'weight': 0.06},
-            {'city': 'Oakland', 'lat': 37.8044, 'lon': -122.2712, 'weight': 0.05},
-            {'city': 'Fresno', 'lat': 36.7378, 'lon': -119.7871, 'weight': 0.04},
-            {'city': 'Santa Barbara', 'lat': 34.4208, 'lon': -119.6982, 'weight': 0.03},
-        ]
-        
-        networks = ['ChargePoint', 'Electrify America', 'EVgo', 'Tesla Supercharger', 'Blink', 'SemaConnect', 'Volta']
-        facility_types = ['Shopping Center', 'Hotel', 'Gas Station', 'Workplace', 'Public', 'Multi-unit Dwelling']
-        
-        stations_data = []
-        total_stations = 15000
-        
-        for i in range(total_stations):
-            # Choose city based on population weight
-            city = np.random.choice(ca_cities, p=[c['weight'] for c in ca_cities])
-            
-            # Add some geographic spread around the city center
-            lat_offset = np.random.normal(0, 0.1)  # ~11 km standard deviation
-            lon_offset = np.random.normal(0, 0.1)
-            
-            # Generate realistic station data
-            network = np.random.choice(networks)
-            facility_type = np.random.choice(facility_types)
-            
-            # Different networks have different typical configurations
-            if network == 'Tesla Supercharger':
-                level2_count = 0
-                dc_fast_count = np.random.randint(4, 20)
-                level1_count = 0
-            elif network == 'Electrify America':
-                level2_count = 0
-                dc_fast_count = np.random.randint(2, 8)
-                level1_count = 0
+                if not stations:
+                    raise ValueError("API returned empty station list")
+                
+                # Process the real data
+                stations_data = []
+                for station in stations:
+                    stations_data.append({
+                        'station_name': station.get('station_name', 'Unknown'),
+                        'street_address': station.get('street_address', ''),
+                        'city': station.get('city', ''),
+                        'state': station.get('state', ''),
+                        'zip_code': station.get('zip', ''),
+                        'latitude': station.get('latitude', 0),
+                        'longitude': station.get('longitude', 0),
+                        'access_code': station.get('access_code', 'Unknown'),
+                        'facility_type': station.get('facility_type', 'Unknown'),
+                        'network': station.get('ev_network', 'Unknown'),
+                        'connector_types': station.get('ev_connector_types', ''),
+                        'level1_count': station.get('ev_level1_evse_num', 0) or 0,
+                        'level2_count': station.get('ev_level2_evse_num', 0) or 0,
+                        'dc_fast_count': station.get('ev_dc_fast_num', 0) or 0,
+                        'pricing': station.get('ev_pricing', 'Unknown'),
+                        'hours': station.get('access_days_time', 'Unknown'),
+                        'date_last_confirmed': station.get('date_last_confirmed', ''),
+                        'updated_at': station.get('updated_at', ''),
+                        'station_phone': station.get('station_phone', ''),
+                        'owner_type': station.get('owner_type_code', 'Unknown'),
+                        'federal_agency': station.get('federal_agency', ''),
+                        'open_date': station.get('open_date', ''),
+                        'cards_accepted': station.get('cards_accepted', ''),
+                        'bd_blends': station.get('bd_blends', ''),
+                        'groups_with_access_code': station.get('groups_with_access_code', ''),
+                        'hydrogen_standards': station.get('hy_standards', ''),
+                        'maximum_vehicle_class': station.get('maximum_vehicle_class', ''),
+                        'country': station.get('country', 'US'),
+                        'intersection_directions': station.get('intersection_directions', ''),
+                        'plus4': station.get('plus4', '')
+                    })
+                
+                stations_df = pd.DataFrame(stations_data)
+                filename = f'charging_stations_CA_{self.timestamp}.csv'
+                filepath = self.data_dir / filename
+                stations_df.to_csv(filepath, index=False)
+                logger.info(f"Created {filename} with {len(stations_df)} real charging stations from NREL API")
+                return stations_df
+                
+            elif response.status_code == 403:
+                logger.error(f"API access forbidden (403). Check your API key.")
+                logger.error(f"Response: {response.text}")
+                raise ValueError("Invalid or missing NREL API key")
+                
             else:
-                level1_count = np.random.poisson(0.5)
-                level2_count = np.random.poisson(3)
-                dc_fast_count = np.random.poisson(0.8)
-            
-            station = {
-                'station_name': f"{network} Station {i+1}",
-                'street_address': f"{np.random.randint(100, 9999)} Main St",
-                'city': city['city'],
-                'state': 'CA',
-                'zip_code': f"9{np.random.randint(0, 5)}{np.random.randint(100, 999):03d}",
-                'latitude': round(city['lat'] + lat_offset, 4),
-                'longitude': round(city['lon'] + lon_offset, 4),
-                'access_code': np.random.choice(['Public', 'Private'], p=[0.8, 0.2]),
-                'facility_type': facility_type,
-                'network': network,
-                'connector_types': 'J1772, CCS',
-                'level1_count': level1_count,
-                'level2_count': level2_count,
-                'dc_fast_count': dc_fast_count,
-                'pricing': np.random.choice(['$0.30/kWh', '$0.35/kWh', '$0.40/kWh', 'Free', 'Membership required']),
-                'hours': np.random.choice(['24/7', 'Business hours', 'Dawn to dusk']),
-                'date_last_confirmed': (datetime.now() - timedelta(days=np.random.randint(1, 365))).strftime('%Y-%m-%d'),
-                'updated_at': datetime.now().strftime('%Y-%m-%d')
-            }
-            stations_data.append(station)
+                logger.error(f"API request failed with status code: {response.status_code}")
+                logger.error(f"Response: {response.text}")
+                raise ValueError(f"NREL API request failed: {response.status_code}")
         
-        stations_df = pd.DataFrame(stations_data)
-        filename = f'charging_stations_CA_{self.timestamp}.csv'
-        filepath = self.data_dir / filename
-        stations_df.to_csv(filepath, index=False)
-        logger.info(f"✅ Created {filename} with {len(stations_df)} sample charging stations")
-        
-        return stations_df
+        except requests.exceptions.Timeout:
+            logger.error("API request timed out after 60 seconds")
+            raise ValueError("NREL API request timed out")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Network error during API request: {e}")
+            raise ValueError(f"Network error: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error during API request: {e}")
+            raise ValueError(f"API request failed: {e}")
     
     def create_ev_sales_data(self):
         """Create realistic EV sales trend data"""
@@ -299,7 +266,7 @@ class EVDataCollector:
         filename = f'ev_sales_data_{self.timestamp}.csv'
         filepath = self.data_dir / filename
         sales_df.to_csv(filepath, index=False)
-        logger.info(f"✅ Created {filename} with {len(sales_df)} monthly records")
+        logger.info(f"Created {filename} with {len(sales_df)} monthly records")
         
         return sales_df
     
@@ -307,6 +274,11 @@ class EVDataCollector:
         """Create a summary JSON file with dataset information"""
         summary = {
             'generation_date': datetime.now().isoformat(),
+            'data_sources': {
+                'charging_stations': 'NREL Alternative Fuel Data Center API (Real Data)',
+                'vehicles': 'Generated realistic data based on EPA specifications',
+                'sales': 'Generated realistic trend data'
+            },
             'datasets': {
                 'epa_vehicles': {
                     'records': len(vehicles_df),
@@ -322,6 +294,7 @@ class EVDataCollector:
                         'level2': int(stations_df['level2_count'].sum()),
                         'dc_fast': int(stations_df['dc_fast_count'].sum())
                     },
+                    'top_networks': stations_df['network'].value_counts().head(5).to_dict(),
                     'columns': list(stations_df.columns)
                 },
                 'ev_sales': {
@@ -338,40 +311,47 @@ class EVDataCollector:
         with open(filepath, 'w') as f:
             json.dump(summary, f, indent=2, default=str)
         
-        logger.info(f"✅ Created summary file: {filename}")
+        logger.info(f"Created summary file: {filename}")
         return summary
     
     def collect_all_data(self):
         """Run the complete data collection process"""
-        logger.info("Starting EV data collection...")
+        logger.info("Starting EV data collection (API only mode)...")
         
-        try:
-            # Create all datasets
-            vehicles_df = self.create_epa_vehicles_data()
-            stations_df = self.get_charging_stations_data()
-            sales_df = self.create_ev_sales_data()
-            
-            # Create summary
-            summary = self.create_summary_file(vehicles_df, stations_df, sales_df)
-            
-            logger.info("✅ Data collection completed successfully!")
-            logger.info(f"Generated files in {self.data_dir}:")
-            for file in self.data_dir.glob('*.csv'):
-                logger.info(f"  - {file.name}")
-            for file in self.data_dir.glob('*.json'):
-                logger.info(f"  - {file.name}")
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ Data collection failed: {e}")
-            return False
+        # Create all datasets - any failure will stop the process
+        vehicles_df = self.create_epa_vehicles_data()
+        stations_df = self.get_charging_stations_data()  # This will fail if API doesn't work
+        sales_df = self.create_ev_sales_data()
+        
+        # Create summary
+        summary = self.create_summary_file(vehicles_df, stations_df, sales_df)
+        
+        logger.info("Data collection completed successfully!")
+        logger.info(f"Generated files in {self.data_dir}:")
+        for file in self.data_dir.glob('*.csv'):
+            logger.info(f"  - {file.name}")
+        for file in self.data_dir.glob('*.json'):
+            logger.info(f"  - {file.name}")
+        
+        return True
 
 if __name__ == "__main__":
-    collector = EVDataCollector()
-    success = collector.collect_all_data()
-    
-    if success:
-        print("\n🎉 Data collection completed! You can now run your Jupyter notebook analysis.")
-    else:
-        print("\n❌ Data collection failed. Check the logs above for details.")
+    try:
+        collector = EVDataCollector()
+        success = collector.collect_all_data()
+        
+        if success:
+            print("\n🎉 Data collection completed! You can now run your Jupyter notebook analysis.")
+            print("All charging station data is from the real NREL API.")
+        
+    except ValueError as e:
+        print(f"\nData collection failed: {e}")
+        print("\nTo fix this:")
+        print("1. Get a free API key from: https://developer.nrel.gov/signup/")
+        print("2. Set it as an environment variable:")
+        print("   export NREL_API_KEY='your_api_key_here'")
+        print("3. Or in Windows: set NREL_API_KEY=your_api_key_here")
+        print("4. Then run this script again")
+    except Exception as e:
+        print(f"\nUnexpected error: {e}")
+        print("Check the logs above for details.")
