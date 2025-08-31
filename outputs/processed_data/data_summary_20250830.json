@@ -1,0 +1,32 @@
+{
+  "export_date": "20250830",
+  "analysis_date": "2025-08-30 17:51:50",
+  "datasets": {
+    "vehicles": {
+      "rows": 48,
+      "columns": 18,
+      "time_span": "2019-2024",
+      "manufacturers": 6
+    },
+    "stations": {
+      "rows": 19915,
+      "columns": 33,
+      "networks": 56,
+      "dc_fast_stations": 2653
+    },
+    "sales": {
+      "rows": 80,
+      "columns": 12,
+      "time_span": "2019-01-01 to 2025-08-01",
+      "total_sales": 470089
+    }
+  },
+  "analysis_performed": [
+    "Efficiency trends by manufacturer",
+    "Charging infrastructure analysis",
+    "Market growth analysis",
+    "Competitive analysis",
+    "Predictive modeling",
+    "K-means clustering segmentation"
+  ]
+}
