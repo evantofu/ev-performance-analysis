@@ -1,154 +1,121 @@
-# EV Performance Analysis
+# EV Performance Analysis & Dashboard
 
-A comprehensive data science project analyzing electric vehicle performance, charging infrastructure, and market trends using Python and statistical modeling.
+A comprehensive analysis and interactive dashboard for electric vehicle market intelligence, performance metrics, and charging infrastructure analysis.
 
-## Project Overview
+## Overview
 
-This project examines the electric vehicle landscape through multiple lenses:
-- **Vehicle Performance**: Efficiency trends, range analysis, and manufacturer comparisons
-- **Charging Infrastructure**: Geographic distribution and network analysis of charging stations
-- **Market Dynamics**: Sales trends, growth forecasting, and competitive positioning
+This project provides a complete analytical pipeline for electric vehicle (EV) data, featuring:
 
-## Key Features
+- **Jupyter Notebook Analysis**: Comprehensive data processing, visualization, and statistical modeling of EV performance metrics
+- **Streamlit Dashboard**: Interactive web application for exploring EV market trends, performance metrics, and charging infrastructure
+- **Advanced Analytics**: Predictive modeling, clustering analysis, and market segmentation
 
-- Automated data collection from NREL Alternative Fuel Data Center API
-- Comprehensive EV performance metrics analysis
-- Interactive visualizations and statistical modeling
-- Predictive analysis using machine learning techniques
-- Executive dashboard with business insights
+## Features
 
-## Dataset Coverage
+### Analytical Components
+- EV efficiency trends by manufacturer and year
+- Charging infrastructure analysis (urban vs. rural distribution)
+- Market growth forecasting and sales trend analysis
+- Competitive analysis of EV manufacturers
+- K-means clustering for market segmentation
+- Geographic mapping of charging stations
 
-- **EPA Vehicle Data**: 8 EV models across 6 years (2019-2024)
-- **Charging Stations**: 15,000+ stations across California
-- **Sales Data**: Monthly EV sales trends from 2019-present
+### Dashboard Features
+- Interactive filters for year, manufacturer, and date ranges
+- Sales forecasting with linear regression models
+- Performance metrics visualization (efficiency, range, pricing)
+- Charging station mapping and network analysis
+- Market segmentation visualization
+- Data export functionality
+
+## Installation
+
+1. Clone the repository:
+```bash
+git clone <your-repo-url>
+cd ev-performance-analysis
+```
+
+2. Create a virtual environment and install dependencies:
+```bash
+python -m venv ev-env
+source ev-env/bin/activate  # On Windows: ev-env\Scripts\activate
+pip install -r requirements.txt
+```
+
+3. Set up the data directory structure:
+```bash
+mkdir -p data/raw outputs/figures outputs/processed_data
+```
+
+## Usage
+
+### Running the Analysis Notebook
+
+1. Launch Jupyter Notebook:
+```bash
+jupyter notebook
+```
+
+2. Open and run `02_ev_performance_analysis.md` to:
+   - Process raw EV data
+   - Generate visualizations and insights
+   - Create predictive models
+   - Export processed data for the dashboard
+
+### Running the Streamlit Dashboard
+
+1. Ensure you've run the analysis notebook to generate processed data
+2. Launch the dashboard:
+```bash
+streamlit run app.py
+```
+
+3. Access the dashboard at `http://localhost:8501`
+
+### Data Requirements
+
+Place your data files in the `data/raw/` directory:
+- `epa_vehicles_YYYYMMDD.csv` - Vehicle performance data
+- `charging_stations_CA_YYYYMMDD.csv` - Charging station data
+- `ev_sales_data_YYYYMMDD.csv` - Sales data
 
 ## Project Structure
 
 ```
 ev-performance-analysis/
-├── README.md                           
-├── requirements.txt                    
-├── .gitignore                         
-├── src/
-│   ├── __init__.py                    
-│   └── data_collection.py             # Data gathering and processing
-├── notebooks/
-│   ├── 01_data_exploration.ipynb      # Initial data analysis
-│   └── 02_ev_performance_analysis.ipynb # Main analysis
 ├── data/
-│   ├── raw/                           # Generated datasets
-│   └── processed/                     # Cleaned data (future use)
-└── outputs/
-    └── figures/                       # Saved visualizations
+│   └── raw/                 # Raw data files
+├── outputs/
+│   ├── figures/             # Generated visualizations
+│   └── processed_data/      # Processed data for dashboard
+├── app.py                   # Streamlit dashboard
+├── 02_ev_performance_analysis.md  # Jupyter notebook
+├── requirements.txt         # Python dependencies
+└── README.md               # This file
 ```
-
-## Setup Instructions
-
-### Prerequisites
-- Python 3.11 or higher
-- Git
-
-### Installation
-
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/yourusername/ev-performance-analysis.git
-   cd ev-performance-analysis
-   ```
-
-2. **Create virtual environment**
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-
-3. **Install dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. **Generate datasets**
-   ```bash
-   python src/data_collection.py
-   ```
-
-5. **Launch Jupyter**
-   ```bash
-   jupyter notebook
-   ```
-
-## Usage
-
-### Data Collection
-The data collection script automatically generates realistic datasets:
-```bash
-python src/data_collection.py
-```
-
-This creates:
-- `epa_vehicles_YYYYMMDD.csv` - Vehicle performance data
-- `charging_stations_CA_YYYYMMDD.csv` - California charging stations
-- `ev_sales_data_YYYYMMDD.csv` - Monthly sales trends
-- `data_summary_YYYYMMDD.json` - Dataset metadata
-
-### Analysis Notebooks
-1. **01_data_exploration.ipynb**: Basic data inspection and quality assessment
-2. **02_ev_performance_analysis.ipynb**: Comprehensive analysis including:
-   - Efficiency trends and correlations
-   - Charging infrastructure analysis
-   - Market growth forecasting
-   - Competitive positioning
-   - Machine learning clustering
-
-## Key Findings
-
-- EV efficiency improving ~3% annually across all manufacturers
-- Tesla leads in efficiency (115+ MPGe average)
-- Charging infrastructure concentrated in urban areas with rural gaps
-- EV market growing at 20%+ CAGR with increasing mainstream adoption
-- Clear segmentation between premium and mass-market offerings
-
-## Technical Approach
-
-- **Data Sources**: NREL API with realistic sample data generation
-- **Analysis**: Pandas, NumPy, Scikit-learn for statistical modeling
-- **Visualization**: Matplotlib, Seaborn for comprehensive charts
-- **Modeling**: Linear regression for forecasting, K-means for clustering
 
 ## Dependencies
 
-Core libraries:
-- pandas, numpy - Data manipulation and analysis
-- matplotlib, seaborn - Data visualization  
-- scikit-learn - Machine learning and clustering
-- requests - API data collection
-- jupyter - Interactive analysis environment
-
-See `requirements.txt` for complete dependency list.
+- Python 3.8+
+- pandas, numpy, matplotlib, seaborn
+- scikit-learn, scipy
+- plotly, folium
+- streamlit
+- jupyter
 
 ## Data Sources
 
-- **NREL Alternative Fuel Data Center API**: Real charging station locations
-- **EPA Vehicle Database**: Simulated based on actual EV specifications
-- **Market Data**: Realistic sales trends incorporating industry growth patterns
-
-## Contributing
-
-This project was developed as a portfolio demonstration. For suggestions or improvements:
-
-1. Fork the repository
-2. Create a feature branch
-3. Submit a pull request with detailed description
+- EPA Vehicle Data
+- NREL Charging Station Data
+- EV Sales Data (simulated for demonstration)
 
 ## License
 
-This project is available for educational and portfolio purposes.
+This project is for portfolio purposes. Please ensure you have proper permissions for any data used.
 
-## Contact
+## Acknowledgments
 
-Created for data science portfolio demonstration. 
-
----
-
-**Note**: This project uses NREL's public DEMO_KEY for API access, which has rate limits but requires no registration.
+- Data provided by EPA and NREL
+- Built with Python's data science ecosystem
+- Dashboard powered by Streamlit
