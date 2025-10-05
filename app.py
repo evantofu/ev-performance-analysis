@@ -276,7 +276,7 @@ def main():
     with tab2:
         st.header("Vehicle Performance Analysis")
         
-        efficiency_available = 'combined_mpg' in filtered_vehicles.columns
+        efficiency_available = 'combined_mpge' in filtered_vehicles.columns
         range_available = 'range_miles' in filtered_vehicles.columns
         price_available = 'msrp_base' in filtered_vehicles.columns
         
@@ -284,7 +284,7 @@ def main():
             col1, col2, col3, col4 = st.columns(4)
             
             with col1:
-                avg_efficiency = filtered_vehicles['combined_mpg'].mean()
+                avg_efficiency = filtered_vehicles['combined_mpge'].mean()
                 st.metric("Average Efficiency", f"{avg_efficiency:.1f} MPGe")
             
             with col2:
@@ -308,7 +308,7 @@ def main():
             # Efficiency by manufacturer
             if 'make' in filtered_vehicles.columns:
                 st.subheader("Efficiency by Manufacturer")
-                efficiency_data = filtered_vehicles.groupby('make')['combined_mpg'].mean().sort_values(ascending=False)
+                efficiency_data = filtered_vehicles.groupby('make')['combined_mpge'].mean().sort_values(ascending=False)
                 
                 fig_eff = px.bar(
                     x=efficiency_data.index,
@@ -326,7 +326,7 @@ def main():
             
             fig_scatter = px.scatter(
                 filtered_vehicles, 
-                x='combined_mpg', 
+                x='combined_mpge', 
                 y='range_miles', 
                 color=color_by,
                 size=size_by,
@@ -341,10 +341,10 @@ def main():
                 fig_price = px.scatter(
                     filtered_vehicles, 
                     x='msrp_base', 
-                    y='combined_mpg', 
+                    y='combined_mpge', 
                     color=color_by,
                     title='Price vs Efficiency',
-                    labels={'msrp_base': 'Price ($)', 'combined_mpg': 'Efficiency (MPGe)'}
+                    labels={'msrp_base': 'Price ($)', 'combined_mpge': 'Efficiency (MPGe)'}
                 )
                 st.plotly_chart(fig_price, use_container_width=True)
         else:
@@ -433,7 +433,7 @@ def main():
         # Clustering analysis
         st.subheader("Market Segmentation (K-means Clustering)")
         
-        feature_cols = ['combined_mpg', 'range_miles', 'msrp_base']
+        feature_cols = ['combined_mpge', 'range_miles', 'msrp_base']
         available_features = [col for col in feature_cols if col in filtered_vehicles.columns]
         
         if len(available_features) >= 2:
@@ -470,8 +470,8 @@ def main():
                 
                 if 'msrp_base' in available_features:
                     cluster_info['Avg Price'] = f"${cluster_df['msrp_base'].mean():,.0f}"
-                if 'combined_mpg' in available_features:
-                    cluster_info['Avg Efficiency'] = f"{cluster_df['combined_mpg'].mean():.1f} MPGe"
+                if 'combined_mpge' in available_features:
+                    cluster_info['Avg Efficiency'] = f"{cluster_df['combined_mpge'].mean():.1f} MPGe"
                 if 'range_miles' in available_features:
                     cluster_info['Avg Range'] = f"{cluster_df['range_miles'].mean():.1f} miles"
                 
@@ -483,9 +483,9 @@ def main():
             st.warning("Insufficient data for clustering analysis")
         
         # Efficiency trends over time
-        if 'year' in filtered_vehicles.columns and 'combined_mpg' in filtered_vehicles.columns:
+        if 'year' in filtered_vehicles.columns and 'combined_mpge' in filtered_vehicles.columns:
             st.subheader("Efficiency Improvement Trends")
-            yearly_efficiency = filtered_vehicles.groupby('year')['combined_mpg'].mean()
+            yearly_efficiency = filtered_vehicles.groupby('year')['combined_mpge'].mean()
             
             fig_trend = px.line(
                 x=yearly_efficiency.index,
