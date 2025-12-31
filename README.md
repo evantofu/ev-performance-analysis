@@ -1,9 +1,3 @@
-Here is a comprehensive README for your project, following the professional structure of your other documentation:
-
-# EV Industry Intelligence Dashboard
-
-**Data-driven insights into the electric vehicle market, performance metrics, and infrastructure growth.**
-
 ## Project Overview
 
 This repository contains a comprehensive data intelligence platform designed to analyze the evolving electric vehicle (EV) landscape. By integrating disparate datasets from the EPA and NREL, the system provides stakeholders with actionable insights into vehicle efficiency, market segmentation, and charging infrastructure readiness.
