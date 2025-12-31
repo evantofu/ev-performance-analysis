@@ -30,8 +30,8 @@ The system utilizes an automated Python pipeline that cleans, integrates, and ex
 
 1. **Clone the repository**:
 ```bash
-git clone https://github.com/your-repo/ev-intelligence.git
-cd ev-intelligence
+git clone https://github.com/evantofu/ev-performance-analysis.git
+cd ev-performance-analysis
 
 ```
 
