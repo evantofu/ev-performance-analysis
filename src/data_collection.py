@@ -1,582 +1,736 @@
-#!/usr/bin/env python3
 """
-EV Performance Analysis Data Collection - Fully Fixed Version
-Generates realistic EV data with accurate pricing, trims, specifications, and validation
+EV Data Collection
+==================
+Pulls from three free sources and writes CSVs to data/raw/ in the exact
+column shapes expected by ev_analysis.py and app.py.
+
+Sources
+-------
+1. fueleconomy.gov REST API   — EPA-tested MPGe, range, specs (no key needed)
+2. OpenEV Data (GitHub)       — richer charging + powertrain specs (no key needed)
+3. NREL AFDC API              — US charging stations (free key from developer.nlr.gov)
+
+Usage
+-----
+    # Minimal — vehicles + stations, skips OpenEV if GitHub is slow
+    python data_collection.py --nrel-key YOUR_KEY
+
+    # Full
+    python data_collection.py --nrel-key YOUR_KEY --include-openev
+
+    # Dry run (no network calls, generates synthetic data for testing)
+    python data_collection.py --dry-run
+
+Get your free NREL key (instant, no approval):
+    https://developer.nlr.gov/signup/
 """
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import sys
+import time
+from datetime import datetime
+from io import StringIO
+from pathlib import Path
+
+import os
 
 import pandas as pd
-import numpy as np
 import requests
-import json
-import os
 from dotenv import load_dotenv
-from datetime import datetime, timedelta
-from pathlib import Path
-import logging
 
-load_dotenv()
+# ── Setup ─────────────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)-8s  %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger(__name__)
 
-# Setup logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+RAW_DIR = Path("data/raw")
+RAW_DIR.mkdir(parents=True, exist_ok=True)
 
-class EVDataCollector:
-    def __init__(self):
-        self.data_dir = Path('data/raw')
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-        self.timestamp = datetime.now().strftime('%Y%m%d')
-        
-        # Check for API key
-        self.nrel_api_key = os.getenv('NREL_API_KEY')
-        if not self.nrel_api_key:
-            logger.error("NREL_API_KEY environment variable not set!")
-            logger.error("Please get a free API key from https://developer.nrel.gov/signup/")
-            logger.error("Then set it as an environment variable: export NREL_API_KEY='your_key_here'")
-            raise ValueError("NREL API key is required")
-    
-    def get_vehicle_class(self, model):
-        """Determine vehicle class based on model name"""
-        model_lower = model.lower()
-        
-        if any(x in model_lower for x in ['r1t', 'lightning', 'silverado']):
-            return 'Pickup Truck'
-        elif any(x in model_lower for x in ['model s', 'i7', 'eqs']):
-            return 'Large Luxury Sedan'
-        elif any(x in model_lower for x in ['model x', 'ix']):
-            return 'Large Luxury SUV'
-        elif any(x in model_lower for x in ['model y', 'mach-e', 'r1s', 'blazer']):
-            return 'Midsize SUV'
-        elif any(x in model_lower for x in ['equinox', 'kona', 'ioniq 5']):
-            return 'Compact SUV'
-        elif any(x in model_lower for x in ['model 3', 'i4', 'ioniq 6']):
-            return 'Compact/Midsize Sedan'
-        elif any(x in model_lower for x in ['bolt']):
-            return 'Subcompact Hatchback'
-        else:
-            return 'Midsize'
-    
-    def validate_vehicle_data(self, record):
-        """Validate vehicle data for consistency"""
-        errors = []
-        warnings = []
-        
-        # Calculate expected range from battery and efficiency
-        # Range = Battery (kWh) * Efficiency (MPGe) / 33.7 (kWh per gallon equivalent)
-        expected_range = (record['battery_capacity_kwh'] * record['combined_mpge']) / 33.7
-        actual_range = record['range_miles']
-        range_diff_pct = abs(expected_range - actual_range) / actual_range * 100
-        
-        if range_diff_pct > 15:
-            warnings.append(f"Range mismatch: Expected ~{expected_range:.0f} mi, got {actual_range} mi ({range_diff_pct:.1f}% diff)")
-        
-        # Validate price reasonableness
-        price_per_kwh = record['msrp_base'] / record['battery_capacity_kwh']
-        if price_per_kwh < 400:
-            warnings.append(f"Price per kWh unusually low: ${price_per_kwh:.0f}/kWh")
-        elif price_per_kwh > 1200:
-            warnings.append(f"Price per kWh unusually high: ${price_per_kwh:.0f}/kWh")
-        
-        # Validate efficiency is reasonable
-        if record['combined_mpge'] < 50 or record['combined_mpge'] > 150:
-            warnings.append(f"Efficiency outside normal range: {record['combined_mpge']} MPGe")
-        
-        # Validate highway < city for EVs
-        if record['highway_mpge'] >= record['city_mpge']:
-            errors.append(f"Highway MPGe should be lower than city for EVs")
-        
-        return errors, warnings
-    
-    def create_epa_vehicles_data(self):
-        """Create comprehensive EPA vehicle efficiency data with accurate specs"""
-        logger.info("Creating EPA vehicles dataset...")
-        
-        # Define realistic EV models with accurate specifications by year and trim
-        # Including onboard charger capacity for accurate charge time calculations
-        ev_models = {
-            'Tesla': {
-                'Model 3': [
-                    {'year': 2019, 'trim': 'Standard Range Plus', 'range': 240, 'efficiency': 130, 'battery': 50.0, 'price': 39990, 'drive': 'RWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2019, 'trim': 'Long Range', 'range': 310, 'efficiency': 120, 'battery': 75.0, 'price': 47990, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2020, 'trim': 'Standard Range Plus', 'range': 250, 'efficiency': 131, 'battery': 50.0, 'price': 37990, 'drive': 'RWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2020, 'trim': 'Long Range', 'range': 322, 'efficiency': 121, 'battery': 75.0, 'price': 46990, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2021, 'trim': 'Standard Range Plus', 'range': 263, 'efficiency': 134, 'battery': 50.0, 'price': 39990, 'drive': 'RWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2021, 'trim': 'Long Range', 'range': 353, 'efficiency': 126, 'battery': 82.0, 'price': 49990, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2022, 'trim': 'RWD', 'range': 272, 'efficiency': 132, 'battery': 60.0, 'price': 46990, 'drive': 'RWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2022, 'trim': 'Long Range', 'range': 358, 'efficiency': 128, 'battery': 82.0, 'price': 57990, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2023, 'trim': 'RWD', 'range': 272, 'efficiency': 132, 'battery': 60.0, 'price': 40240, 'drive': 'RWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2023, 'trim': 'Long Range', 'range': 341, 'efficiency': 123, 'battery': 82.0, 'price': 47240, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2024, 'trim': 'RWD', 'range': 272, 'efficiency': 132, 'battery': 60.0, 'price': 38990, 'drive': 'RWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2024, 'trim': 'Long Range', 'range': 341, 'efficiency': 123, 'battery': 82.0, 'price': 45990, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                ],
-                'Model Y': [
-                    {'year': 2020, 'trim': 'Long Range', 'range': 316, 'efficiency': 121, 'battery': 75.0, 'price': 52990, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2020, 'trim': 'Performance', 'range': 291, 'efficiency': 111, 'battery': 75.0, 'price': 60990, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2021, 'trim': 'Long Range', 'range': 330, 'efficiency': 125, 'battery': 75.0, 'price': 54990, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2021, 'trim': 'Performance', 'range': 303, 'efficiency': 115, 'battery': 75.0, 'price': 62990, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2022, 'trim': 'Long Range', 'range': 330, 'efficiency': 122, 'battery': 75.0, 'price': 62990, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2022, 'trim': 'Performance', 'range': 303, 'efficiency': 112, 'battery': 75.0, 'price': 69990, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2023, 'trim': 'Long Range', 'range': 330, 'efficiency': 122, 'battery': 75.0, 'price': 52490, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2023, 'trim': 'Performance', 'range': 303, 'efficiency': 112, 'battery': 75.0, 'price': 56990, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2024, 'trim': 'Long Range', 'range': 310, 'efficiency': 117, 'battery': 75.0, 'price': 48990, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2024, 'trim': 'Performance', 'range': 285, 'efficiency': 107, 'battery': 75.0, 'price': 52490, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                ],
-                'Model S': [
-                    {'year': 2021, 'trim': 'Long Range', 'range': 405, 'efficiency': 115, 'battery': 100.0, 'price': 89990, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2022, 'trim': 'Long Range', 'range': 405, 'efficiency': 115, 'battery': 100.0, 'price': 104990, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2023, 'trim': 'Long Range', 'range': 405, 'efficiency': 115, 'battery': 100.0, 'price': 88490, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2024, 'trim': 'Long Range', 'range': 402, 'efficiency': 113, 'battery': 100.0, 'price': 74990, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                ],
-                'Model X': [
-                    {'year': 2021, 'trim': 'Long Range', 'range': 360, 'efficiency': 96, 'battery': 100.0, 'price': 99990, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2022, 'trim': 'Long Range', 'range': 348, 'efficiency': 93, 'battery': 100.0, 'price': 114990, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2023, 'trim': 'Long Range', 'range': 348, 'efficiency': 93, 'battery': 100.0, 'price': 98490, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2024, 'trim': 'Long Range', 'range': 335, 'efficiency': 89, 'battery': 100.0, 'price': 79990, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                ],
-            },
-            'Ford': {
-                'Mustang Mach-E': [
-                    {'year': 2021, 'trim': 'Standard Range', 'range': 230, 'efficiency': 97, 'battery': 68.0, 'price': 42895, 'drive': 'RWD', 'charger_kw': 10.5, 'source': 'EPA'},
-                    {'year': 2021, 'trim': 'Extended Range', 'range': 305, 'efficiency': 103, 'battery': 88.0, 'price': 50600, 'drive': 'RWD', 'charger_kw': 10.5, 'source': 'EPA'},
-                    {'year': 2021, 'trim': 'Extended Range AWD', 'range': 270, 'efficiency': 93, 'battery': 88.0, 'price': 53600, 'drive': 'AWD', 'charger_kw': 10.5, 'source': 'EPA'},
-                    {'year': 2022, 'trim': 'Standard Range', 'range': 247, 'efficiency': 101, 'battery': 70.0, 'price': 46895, 'drive': 'RWD', 'charger_kw': 10.5, 'source': 'EPA'},
-                    {'year': 2022, 'trim': 'Extended Range', 'range': 312, 'efficiency': 105, 'battery': 91.0, 'price': 55300, 'drive': 'RWD', 'charger_kw': 10.5, 'source': 'EPA'},
-                    {'year': 2022, 'trim': 'Extended Range AWD', 'range': 277, 'efficiency': 95, 'battery': 91.0, 'price': 58300, 'drive': 'AWD', 'charger_kw': 10.5, 'source': 'EPA'},
-                    {'year': 2023, 'trim': 'Standard Range', 'range': 250, 'efficiency': 102, 'battery': 70.0, 'price': 46895, 'drive': 'RWD', 'charger_kw': 10.5, 'source': 'EPA'},
-                    {'year': 2023, 'trim': 'Extended Range', 'range': 312, 'efficiency': 105, 'battery': 91.0, 'price': 52400, 'drive': 'RWD', 'charger_kw': 10.5, 'source': 'EPA'},
-                    {'year': 2023, 'trim': 'Extended Range AWD', 'range': 280, 'efficiency': 96, 'battery': 91.0, 'price': 55400, 'drive': 'AWD', 'charger_kw': 10.5, 'source': 'EPA'},
-                    {'year': 2024, 'trim': 'Standard Range', 'range': 250, 'efficiency': 102, 'battery': 70.0, 'price': 39995, 'drive': 'RWD', 'charger_kw': 10.5, 'source': 'EPA'},
-                    {'year': 2024, 'trim': 'Extended Range', 'range': 312, 'efficiency': 105, 'battery': 91.0, 'price': 46995, 'drive': 'RWD', 'charger_kw': 10.5, 'source': 'EPA'},
-                    {'year': 2024, 'trim': 'Extended Range AWD', 'range': 280, 'efficiency': 96, 'battery': 91.0, 'price': 49995, 'drive': 'AWD', 'charger_kw': 10.5, 'source': 'EPA'},
-                ],
-                'F-150 Lightning': [
-                    {'year': 2022, 'trim': 'Standard Range', 'range': 230, 'efficiency': 66, 'battery': 98.0, 'price': 59974, 'drive': 'AWD', 'charger_kw': 19.2, 'source': 'EPA'},
-                    {'year': 2022, 'trim': 'Extended Range', 'range': 320, 'efficiency': 70, 'battery': 131.0, 'price': 79974, 'drive': 'AWD', 'charger_kw': 19.2, 'source': 'EPA'},
-                    {'year': 2023, 'trim': 'Standard Range', 'range': 240, 'efficiency': 68, 'battery': 98.0, 'price': 59974, 'drive': 'AWD', 'charger_kw': 19.2, 'source': 'EPA'},
-                    {'year': 2023, 'trim': 'Extended Range', 'range': 320, 'efficiency': 70, 'battery': 131.0, 'price': 79974, 'drive': 'AWD', 'charger_kw': 19.2, 'source': 'EPA'},
-                    {'year': 2024, 'trim': 'Standard Range', 'range': 240, 'efficiency': 68, 'battery': 98.0, 'price': 62995, 'drive': 'AWD', 'charger_kw': 19.2, 'source': 'EPA'},
-                    {'year': 2024, 'trim': 'Extended Range', 'range': 320, 'efficiency': 70, 'battery': 131.0, 'price': 82995, 'drive': 'AWD', 'charger_kw': 19.2, 'source': 'EPA'},
-                ],
-            },
-            'Chevrolet': {
-                'Bolt EV': [
-                    {'year': 2019, 'trim': 'LT', 'range': 238, 'efficiency': 119, 'battery': 60.0, 'price': 36620, 'drive': 'FWD', 'charger_kw': 7.2, 'source': 'EPA'},
-                    {'year': 2020, 'trim': 'LT', 'range': 259, 'efficiency': 127, 'battery': 66.0, 'price': 37495, 'drive': 'FWD', 'charger_kw': 7.2, 'source': 'EPA'},
-                    {'year': 2021, 'trim': 'LT', 'range': 259, 'efficiency': 127, 'battery': 66.0, 'price': 31995, 'drive': 'FWD', 'charger_kw': 7.2, 'source': 'EPA'},
-                    {'year': 2022, 'trim': 'LT', 'range': 259, 'efficiency': 120, 'battery': 65.0, 'price': 31500, 'drive': 'FWD', 'charger_kw': 11.0, 'source': 'EPA'},
-                    {'year': 2023, 'trim': 'LT', 'range': 259, 'efficiency': 120, 'battery': 65.0, 'price': 26500, 'drive': 'FWD', 'charger_kw': 11.0, 'source': 'EPA'},
-                    {'year': 2024, 'trim': 'LT', 'range': 259, 'efficiency': 120, 'battery': 65.0, 'price': 27495, 'drive': 'FWD', 'charger_kw': 11.0, 'source': 'EPA'},
-                ],
-                'Bolt EUV': [
-                    {'year': 2022, 'trim': 'LT', 'range': 247, 'efficiency': 115, 'battery': 65.0, 'price': 33500, 'drive': 'FWD', 'charger_kw': 11.0, 'source': 'EPA'},
-                    {'year': 2023, 'trim': 'LT', 'range': 247, 'efficiency': 115, 'battery': 65.0, 'price': 28500, 'drive': 'FWD', 'charger_kw': 11.0, 'source': 'EPA'},
-                    {'year': 2024, 'trim': 'LT', 'range': 247, 'efficiency': 115, 'battery': 65.0, 'price': 28795, 'drive': 'FWD', 'charger_kw': 11.0, 'source': 'EPA'},
-                ],
-                'Blazer EV': [
-                    {'year': 2024, 'trim': 'LT', 'range': 279, 'efficiency': 96, 'battery': 85.0, 'price': 48800, 'drive': 'FWD', 'charger_kw': 11.5, 'source': 'Manufacturer'},
-                    {'year': 2024, 'trim': 'RS', 'range': 293, 'efficiency': 99, 'battery': 85.0, 'price': 51800, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'Manufacturer'},
-                ],
-                'Equinox EV': [
-                    {'year': 2024, 'trim': 'LT', 'range': 319, 'efficiency': 110, 'battery': 85.0, 'price': 34995, 'drive': 'FWD', 'charger_kw': 11.5, 'source': 'Manufacturer'},
-                ],
-                'Silverado EV': [
-                    {'year': 2024, 'trim': 'WT', 'range': 393, 'efficiency': 65, 'battery': 200.0, 'price': 77905, 'drive': 'AWD', 'charger_kw': 19.2, 'source': 'Manufacturer'},
-                ],
-            },
-            'BMW': {
-                'i4': [
-                    {'year': 2022, 'trim': 'eDrive40', 'range': 301, 'efficiency': 109, 'battery': 83.9, 'price': 55400, 'drive': 'RWD', 'charger_kw': 11.0, 'source': 'EPA'},
-                    {'year': 2022, 'trim': 'M50', 'range': 270, 'efficiency': 94, 'battery': 83.9, 'price': 65900, 'drive': 'AWD', 'charger_kw': 11.0, 'source': 'EPA'},
-                    {'year': 2023, 'trim': 'eDrive40', 'range': 301, 'efficiency': 109, 'battery': 83.9, 'price': 57400, 'drive': 'RWD', 'charger_kw': 11.0, 'source': 'EPA'},
-                    {'year': 2023, 'trim': 'M50', 'range': 271, 'efficiency': 95, 'battery': 83.9, 'price': 67900, 'drive': 'AWD', 'charger_kw': 11.0, 'source': 'EPA'},
-                    {'year': 2024, 'trim': 'eDrive40', 'range': 301, 'efficiency': 109, 'battery': 83.9, 'price': 59400, 'drive': 'RWD', 'charger_kw': 11.0, 'source': 'EPA'},
-                    {'year': 2024, 'trim': 'M50', 'range': 271, 'efficiency': 95, 'battery': 83.9, 'price': 69900, 'drive': 'AWD', 'charger_kw': 11.0, 'source': 'EPA'},
-                ],
-                'iX': [
-                    {'year': 2022, 'trim': 'xDrive50', 'range': 324, 'efficiency': 86, 'battery': 105.2, 'price': 83200, 'drive': 'AWD', 'charger_kw': 11.0, 'source': 'EPA'},
-                    {'year': 2022, 'trim': 'M60', 'range': 288, 'efficiency': 78, 'battery': 105.2, 'price': 105700, 'drive': 'AWD', 'charger_kw': 11.0, 'source': 'EPA'},
-                    {'year': 2023, 'trim': 'xDrive50', 'range': 324, 'efficiency': 86, 'battery': 105.2, 'price': 87250, 'drive': 'AWD', 'charger_kw': 11.0, 'source': 'EPA'},
-                    {'year': 2023, 'trim': 'M60', 'range': 288, 'efficiency': 78, 'battery': 105.2, 'price': 109595, 'drive': 'AWD', 'charger_kw': 11.0, 'source': 'EPA'},
-                    {'year': 2024, 'trim': 'xDrive50', 'range': 324, 'efficiency': 86, 'battery': 105.2, 'price': 87250, 'drive': 'AWD', 'charger_kw': 11.0, 'source': 'EPA'},
-                    {'year': 2024, 'trim': 'M60', 'range': 288, 'efficiency': 78, 'battery': 105.2, 'price': 109595, 'drive': 'AWD', 'charger_kw': 11.0, 'source': 'EPA'},
-                ],
-                'i7': [
-                    {'year': 2023, 'trim': 'xDrive60', 'range': 321, 'efficiency': 82, 'battery': 101.7, 'price': 105700, 'drive': 'AWD', 'charger_kw': 11.0, 'source': 'EPA'},
-                    {'year': 2024, 'trim': 'xDrive60', 'range': 321, 'efficiency': 82, 'battery': 101.7, 'price': 105700, 'drive': 'AWD', 'charger_kw': 11.0, 'source': 'EPA'},
-                ],
-            },
-            'Hyundai': {
-                'Ioniq 5': [
-                    {'year': 2022, 'trim': 'Standard Range', 'range': 220, 'efficiency': 110, 'battery': 58.0, 'price': 43650, 'drive': 'RWD', 'charger_kw': 10.9, 'source': 'EPA'},
-                    {'year': 2022, 'trim': 'Long Range', 'range': 303, 'efficiency': 114, 'battery': 77.4, 'price': 47150, 'drive': 'RWD', 'charger_kw': 10.9, 'source': 'EPA'},
-                    {'year': 2022, 'trim': 'Long Range AWD', 'range': 256, 'efficiency': 98, 'battery': 77.4, 'price': 50650, 'drive': 'AWD', 'charger_kw': 10.9, 'source': 'EPA'},
-                    {'year': 2023, 'trim': 'Standard Range', 'range': 220, 'efficiency': 110, 'battery': 58.0, 'price': 41450, 'drive': 'RWD', 'charger_kw': 10.9, 'source': 'EPA'},
-                    {'year': 2023, 'trim': 'Long Range', 'range': 303, 'efficiency': 114, 'battery': 77.4, 'price': 47000, 'drive': 'RWD', 'charger_kw': 10.9, 'source': 'EPA'},
-                    {'year': 2023, 'trim': 'Long Range AWD', 'range': 266, 'efficiency': 102, 'battery': 77.4, 'price': 50500, 'drive': 'AWD', 'charger_kw': 10.9, 'source': 'EPA'},
-                    {'year': 2024, 'trim': 'Standard Range', 'range': 220, 'efficiency': 110, 'battery': 58.0, 'price': 41800, 'drive': 'RWD', 'charger_kw': 10.9, 'source': 'EPA'},
-                    {'year': 2024, 'trim': 'Long Range', 'range': 303, 'efficiency': 114, 'battery': 77.4, 'price': 48500, 'drive': 'RWD', 'charger_kw': 10.9, 'source': 'EPA'},
-                    {'year': 2024, 'trim': 'Long Range AWD', 'range': 266, 'efficiency': 102, 'battery': 77.4, 'price': 52000, 'drive': 'AWD', 'charger_kw': 10.9, 'source': 'EPA'},
-                ],
-                'Ioniq 6': [
-                    {'year': 2023, 'trim': 'SE', 'range': 361, 'efficiency': 140, 'battery': 77.4, 'price': 41600, 'drive': 'RWD', 'charger_kw': 10.9, 'source': 'EPA'},
-                    {'year': 2023, 'trim': 'SEL', 'range': 305, 'efficiency': 117, 'battery': 77.4, 'price': 45500, 'drive': 'AWD', 'charger_kw': 10.9, 'source': 'EPA'},
-                    {'year': 2024, 'trim': 'SE', 'range': 361, 'efficiency': 140, 'battery': 77.4, 'price': 42715, 'drive': 'RWD', 'charger_kw': 10.9, 'source': 'EPA'},
-                    {'year': 2024, 'trim': 'SEL', 'range': 305, 'efficiency': 117, 'battery': 77.4, 'price': 46615, 'drive': 'AWD', 'charger_kw': 10.9, 'source': 'EPA'},
-                ],
-                'Kona Electric': [
-                    {'year': 2022, 'trim': 'SE', 'range': 258, 'efficiency': 120, 'battery': 64.0, 'price': 34000, 'drive': 'FWD', 'charger_kw': 7.2, 'source': 'EPA'},
-                    {'year': 2023, 'trim': 'SE', 'range': 258, 'efficiency': 120, 'battery': 64.0, 'price': 33550, 'drive': 'FWD', 'charger_kw': 7.2, 'source': 'EPA'},
-                    {'year': 2024, 'trim': 'SE', 'range': 261, 'efficiency': 122, 'battery': 65.4, 'price': 33875, 'drive': 'FWD', 'charger_kw': 7.2, 'source': 'EPA'},
-                ],
-            },
-            'Rivian': {
-                'R1T': [
-                    {'year': 2022, 'trim': 'Explore', 'range': 314, 'efficiency': 70, 'battery': 135.0, 'price': 73000, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2022, 'trim': 'Adventure', 'range': 314, 'efficiency': 70, 'battery': 135.0, 'price': 78000, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2023, 'trim': 'Explore', 'range': 328, 'efficiency': 72, 'battery': 135.0, 'price': 73000, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2023, 'trim': 'Adventure', 'range': 328, 'efficiency': 72, 'battery': 135.0, 'price': 78000, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2024, 'trim': 'Dual Standard', 'range': 270, 'efficiency': 65, 'battery': 105.0, 'price': 69900, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2024, 'trim': 'Dual Large', 'range': 330, 'efficiency': 73, 'battery': 135.0, 'price': 75900, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2024, 'trim': 'Quad Large', 'range': 328, 'efficiency': 72, 'battery': 135.0, 'price': 86900, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                ],
-                'R1S': [
-                    {'year': 2022, 'trim': 'Explore', 'range': 316, 'efficiency': 69, 'battery': 135.0, 'price': 78000, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2022, 'trim': 'Adventure', 'range': 316, 'efficiency': 69, 'battery': 135.0, 'price': 83000, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2023, 'trim': 'Explore', 'range': 330, 'efficiency': 71, 'battery': 135.0, 'price': 78000, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2023, 'trim': 'Adventure', 'range': 330, 'efficiency': 71, 'battery': 135.0, 'price': 83000, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2024, 'trim': 'Dual Standard', 'range': 270, 'efficiency': 64, 'battery': 105.0, 'price': 75900, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2024, 'trim': 'Dual Large', 'range': 330, 'efficiency': 71, 'battery': 135.0, 'price': 79900, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                    {'year': 2024, 'trim': 'Quad Large', 'range': 330, 'efficiency': 71, 'battery': 135.0, 'price': 89900, 'drive': 'AWD', 'charger_kw': 11.5, 'source': 'EPA'},
-                ],
-            },
-        }
-        
-        vehicles_data = []
-        validation_warnings = []
-        validation_errors = []
-        
-        for make, models in ev_models.items():
-            for model, trims in models.items():
-                for trim_data in trims:
-                    # Calculate highway and city MPGe
-                    # For EVs: city efficiency is typically 5-10% better than highway due to regenerative braking
-                    city_mpge = trim_data['efficiency']
-                    highway_mpge = round(city_mpge * 0.88)  # Highway is ~12% less efficient
-                    combined_mpge = round(city_mpge * 0.93)  # Combined is ~7% less efficient
-                    
-                    record = {
-                        'year': trim_data['year'],
-                        'make': make,
-                        'model': model,
-                        'trim': trim_data['trim'],
-                        'drive_type': trim_data['drive'],
-                        'fuel_type': 'Electric',
-                        'vehicle_class': self.get_vehicle_class(model),
-                        'engine_description': 'Electric Motor',
-                        'transmission': 'Automatic (variable gear ratios)',
-                        'city_mpge': city_mpge,
-                        'highway_mpge': highway_mpge,
-                        'combined_mpge': combined_mpge,
-                        'range_miles': trim_data['range'],
-                        'battery_capacity_kwh': trim_data['battery'],
-                        'onboard_charger_kw': trim_data['charger_kw'],
-                        'charge_time_240v_hours': round(trim_data['battery'] / trim_data['charger_kw'], 1),
-                        'msrp_base': trim_data['price'],
-                        'price_per_kwh': round(trim_data['price'] / trim_data['battery']),
-                        'co2_emissions': 0,
-                        'ghg_score': 10,
-                        'data_source': trim_data['source']
-                    }
-                    
-                    # Validate the record
-                    errors, warnings = self.validate_vehicle_data(record)
-                    if errors:
-                        validation_errors.extend([f"{make} {model} {trim_data['year']} {trim_data['trim']}: {e}" for e in errors])
-                    if warnings:
-                        validation_warnings.extend([f"{make} {model} {trim_data['year']} {trim_data['trim']}: {w}" for w in warnings])
-                    
-                    vehicles_data.append(record)
-        
-        vehicles_df = pd.DataFrame(vehicles_data)
-        
-        # Log validation results
-        if validation_errors:
-            logger.error(f"Found {len(validation_errors)} validation errors:")
-            for error in validation_errors[:5]:  # Show first 5
-                logger.error(f"  - {error}")
-        
-        if validation_warnings:
-            logger.warning(f"Found {len(validation_warnings)} validation warnings:")
-            for warning in validation_warnings[:5]:  # Show first 5
-                logger.warning(f"  - {warning}")
-        
-        # Save to CSV
-        filename = f'epa_vehicles_{self.timestamp}.csv'
-        filepath = self.data_dir / filename
-        vehicles_df.to_csv(filepath, index=False)
-        logger.info(f"Created {filename} with {len(vehicles_df)} records")
-        logger.info(f"  - {len(vehicles_df['make'].unique())} manufacturers")
-        logger.info(f"  - {len(vehicles_df.groupby(['make', 'model']))} unique models")
-        logger.info(f"  - {len(vehicles_df)} total trim configurations")
-        logger.info(f"  - Years: {vehicles_df['year'].min()}-{vehicles_df['year'].max()}")
-        logger.info(f"  - Price range: ${vehicles_df['msrp_base'].min():,} - ${vehicles_df['msrp_base'].max():,}")
-        logger.info(f"  - Efficiency range: {vehicles_df['combined_mpge'].min()}-{vehicles_df['combined_mpge'].max()} MPGe")
-        
-        return vehicles_df
-    
-    def get_charging_stations_data(self):
-        """Get real NREL charging station data for California - API ONLY"""
-        logger.info("Fetching NREL charging stations data (API only)...")
-        
-        # NREL Alternative Fuel Data Center API
-        url = "https://developer.nrel.gov/api/alt-fuel-stations/v1.json"
-        params = {
-            'fuel_type': 'ELEC',
-            'state': 'CA',
-            'limit': 'all',
-            'format': 'json',
-            'api_key': self.nrel_api_key
-        }
-        
-        logger.info(f"Making API request to: {url}")
-        params_log = params.copy()
-        params_log['api_key'] = '***REDACTED***'
-        logger.info(f"API parameters: {params_log}")
-        
+STAMP = datetime.now().strftime("%Y%m%d")
+
+SESSION = requests.Session()
+SESSION.headers.update({"User-Agent": "ev-explorer-data-collector/1.0"})
+
+
+def _get(url: str, params: dict | None = None, retries: int = 3) -> requests.Response:
+    """GET with retries and a short back-off."""
+    for attempt in range(retries):
         try:
-            response = requests.get(url, params=params, timeout=60)
-            logger.info(f"API response status code: {response.status_code}")
-            
-            if response.status_code == 200:
-                data = response.json()
-                stations = data.get('fuel_stations', [])
-                logger.info(f"Retrieved {len(stations)} stations from API")
-                
-                if not stations:
-                    raise ValueError("API returned empty station list")
-                
-                # Process the real data
-                stations_data = []
-                for station in stations:
-                    stations_data.append({
-                        'station_name': station.get('station_name', 'Unknown'),
-                        'street_address': station.get('street_address', ''),
-                        'city': station.get('city', ''),
-                        'state': station.get('state', ''),
-                        'zip_code': station.get('zip', ''),
-                        'latitude': station.get('latitude', 0),
-                        'longitude': station.get('longitude', 0),
-                        'access_code': station.get('access_code', 'Unknown'),
-                        'facility_type': station.get('facility_type', 'Unknown'),
-                        'network': station.get('ev_network', 'Unknown'),
-                        'connector_types': station.get('ev_connector_types', ''),
-                        'level1_count': station.get('ev_level1_evse_num', 0) or 0,
-                        'level2_count': station.get('ev_level2_evse_num', 0) or 0,
-                        'dc_fast_count': station.get('ev_dc_fast_num', 0) or 0,
-                        'pricing': station.get('ev_pricing', 'Unknown'),
-                        'hours': station.get('access_days_time', 'Unknown'),
-                        'date_last_confirmed': station.get('date_last_confirmed', ''),
-                        'updated_at': station.get('updated_at', ''),
-                        'station_phone': station.get('station_phone', ''),
-                        'owner_type': station.get('owner_type_code', 'Unknown'),
-                        'federal_agency': station.get('federal_agency', ''),
-                        'open_date': station.get('open_date', ''),
-                        'cards_accepted': station.get('cards_accepted', ''),
-                        'bd_blends': station.get('bd_blends', ''),
-                        'groups_with_access_code': station.get('groups_with_access_code', ''),
-                        'hydrogen_standards': station.get('hy_standards', ''),
-                        'maximum_vehicle_class': station.get('maximum_vehicle_class', ''),
-                        'country': station.get('country', 'US'),
-                        'intersection_directions': station.get('intersection_directions', ''),
-                        'plus4': station.get('plus4', '')
-                    })
-                
-                stations_df = pd.DataFrame(stations_data)
-                filename = f'charging_stations_CA_{self.timestamp}.csv'
-                filepath = self.data_dir / filename
-                stations_df.to_csv(filepath, index=False)
-                logger.info(f"Created {filename} with {len(stations_df)} real charging stations from NREL API")
-                return stations_df
-                
-            elif response.status_code == 403:
-                logger.error(f"API access forbidden (403). Check your API key.")
-                logger.error(f"Response: {response.text}")
-                raise ValueError("Invalid or missing NREL API key")
-                
-            else:
-                logger.error(f"API request failed with status code: {response.status_code}")
-                logger.error(f"Response: {response.text}")
-                raise ValueError(f"NREL API request failed: {response.status_code}")
-        
-        except requests.exceptions.Timeout:
-            logger.error("API request timed out after 60 seconds")
-            raise ValueError("NREL API request timed out")
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Network error during API request: {e}")
-            raise ValueError(f"Network error: {e}")
-        except Exception as e:
-            logger.error(f"Unexpected error during API request: {e}")
-            raise ValueError(f"API request failed: {e}")
-    
-    def create_ev_sales_data(self):
-        """Create realistic EV sales trend data"""
-        logger.info("Creating EV sales trend data...")
-        
-        # Generate monthly data from Jan 2019 to present
-        start_date = datetime(2019, 1, 1)
-        end_date = datetime.now()
-        
-        sales_data = []
-        current_date = start_date
-        
-        # Base monthly sales with realistic growth trend
-        base_sales = 5000  # Starting monthly EV sales
-        
-        while current_date <= end_date:
-            # Calculate months since start for trend
-            months_elapsed = (current_date.year - 2019) * 12 + (current_date.month - 1)
-            
-            # Exponential growth with some seasonality
-            growth_factor = 1.05 ** (months_elapsed / 12)  # 5% annual growth rate
-            seasonal_factor = 1 + 0.1 * np.sin(2 * np.pi * current_date.month / 12)  # Seasonal variation
-            
-            # COVID impact (reduced sales in 2020)
-            covid_factor = 1.0
-            if current_date.year == 2020:
-                covid_factor = 0.7 + 0.3 * (current_date.month / 12)  # Recovery throughout 2020
-            
-            # Random monthly variation
-            random_factor = np.random.normal(1, 0.1)
-            
-            monthly_sales = round(base_sales * growth_factor * seasonal_factor * covid_factor * random_factor)
-            
-            sales_data.append({
-                'date': current_date.strftime('%Y-%m-%d'),
-                'year': current_date.year,
-                'month': current_date.month,
-                'month_name': current_date.strftime('%B'),
-                'quarter': f"Q{(current_date.month-1)//3 + 1}",
-                'total_ev_sales': monthly_sales,
-                'tesla_sales': round(monthly_sales * np.random.uniform(0.5, 0.7)),  # Tesla market share
-                'other_premium_sales': round(monthly_sales * np.random.uniform(0.1, 0.2)),
-                'mass_market_sales': round(monthly_sales * np.random.uniform(0.1, 0.3)),
-                'market_share_percent': round(np.random.uniform(2, 8), 1) if current_date.year >= 2020 else round(np.random.uniform(1, 3), 1),
-                'avg_price': round(35000 + np.random.normal(15000, 5000)),
-                'incentives_total': round(np.random.uniform(5000, 12000))
-            })
-            
-            # Move to next month
-            if current_date.month == 12:
-                current_date = current_date.replace(year=current_date.year + 1, month=1)
-            else:
-                current_date = current_date.replace(month=current_date.month + 1)
-        
-        sales_df = pd.DataFrame(sales_data)
-        filename = f'ev_sales_data_{self.timestamp}.csv'
-        filepath = self.data_dir / filename
-        sales_df.to_csv(filepath, index=False)
-        logger.info(f"Created {filename} with {len(sales_df)} monthly records")
-        
-        return sales_df
-    
-    def create_summary_file(self, vehicles_df, stations_df, sales_df):
-        """Create a summary JSON file with dataset information"""
-        summary = {
-            'generation_date': datetime.now().isoformat(),
-            'data_sources': {
-                'charging_stations': 'NREL Alternative Fuel Data Center API (Real Data)',
-                'vehicles': 'Realistic data based on actual EPA specifications and manufacturer MSRPs',
-                'sales': 'Generated realistic trend data'
-            },
-            'datasets': {
-                'epa_vehicles': {
-                    'records': len(vehicles_df),
-                    'years_covered': f"{vehicles_df['year'].min()}-{vehicles_df['year'].max()}",
-                    'unique_manufacturers': len(vehicles_df['make'].unique()),
-                    'unique_models': len(vehicles_df.groupby(['make', 'model'])),
-                    'total_trims': len(vehicles_df),
-                    'price_range': f"${vehicles_df['msrp_base'].min():,} - ${vehicles_df['msrp_base'].max():,}",
-                    'efficiency_range': f"{vehicles_df['combined_mpge'].min()} - {vehicles_df['combined_mpge'].max()} MPGe",
-                    'range_range': f"{vehicles_df['range_miles'].min()} - {vehicles_df['range_miles'].max()} miles",
-                    'data_sources': vehicles_df['data_source'].value_counts().to_dict(),
-                    'columns': list(vehicles_df.columns)
-                },
-                'charging_stations': {
-                    'records': len(stations_df),
-                    'unique_cities': len(stations_df['city'].unique()),
-                    'total_connectors': {
-                        'level1': int(stations_df['level1_count'].sum()),
-                        'level2': int(stations_df['level2_count'].sum()),
-                        'dc_fast': int(stations_df['dc_fast_count'].sum())
-                    },
-                    'top_networks': stations_df['network'].value_counts().head(5).to_dict(),
-                    'columns': list(stations_df.columns)
-                },
-                'ev_sales': {
-                    'records': len(sales_df),
-                    'date_range': f"{sales_df['date'].min()} to {sales_df['date'].max()}",
-                    'total_sales': int(sales_df['total_ev_sales'].sum()),
-                    'columns': list(sales_df.columns)
+            r = SESSION.get(url, params=params, timeout=30)
+            r.raise_for_status()
+            return r
+        except requests.RequestException as e:
+            if attempt == retries - 1:
+                raise
+            wait = 2 ** attempt
+            log.warning("  Retry %d/%d after %ds (%s)", attempt + 1, retries, wait, e)
+            time.sleep(wait)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SOURCE 1 — fueleconomy.gov bulk CSV download
+# No key, no pagination, no XML parsing.  One request fetches every vehicle
+# EPA has ever tested (1984–present) in a single ~4 MB CSV.
+# Download page: https://www.fueleconomy.gov/feg/download.shtml
+#
+# The menu-based REST API returns XML for the year/make/model menus, which
+# cannot be reliably parsed as JSON.  The bulk CSV is the correct approach
+# for any batch / analysis workload — faster and more complete.
+# ══════════════════════════════════════════════════════════════════════════════
+FE_CSV_URL = "https://www.fueleconomy.gov/feg/epadata/vehicles.csv.zip"
+
+
+def _float(val) -> float | None:
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return None
+
+
+def collect_vehicles_fe(start_year: int = 2019) -> pd.DataFrame:
+    """
+    Download the full fueleconomy.gov vehicles CSV (zipped, ~4 MB) and
+    return EV/PHEV rows from start_year onward.
+
+    Column mapping keeps the same output shape used by ev_analysis.py
+    and app.py so nothing downstream needs to change.
+    """
+    log.info("── fueleconomy.gov: downloading bulk CSV (one request, ~4 MB)")
+    r = _get(FE_CSV_URL)
+
+    import io, zipfile
+    with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+        csv_name = [n for n in z.namelist() if n.endswith(".csv")][0]
+        with z.open(csv_name) as f:
+            raw = pd.read_csv(f, low_memory=False)
+
+    log.info("  Full dataset: %d rows — filtering EVs from %d+", len(raw), start_year)
+
+    # Filter to EVs and PHEVs only
+    ev_mask = (
+        raw["fuelType1"].str.contains("Electricity", na=False)
+        | raw["fuelType2"].str.contains("Electricity", na=False)
+        | raw["atvType"].str.contains("EV|PHEV|Plug-in", na=False, case=False)
+    )
+    df = raw[ev_mask & (raw["year"] >= start_year)].copy()
+    log.info("  EV rows after filter: %d", len(df))
+
+    # Rename to the column names the rest of the pipeline expects
+    col_map = {
+        "id":            "fueleconomy_id",
+        "year":          "year",
+        "make":          "make",
+        "model":         "model",
+        "trany":         "trany",
+        "drive":         "drive",
+        "VClass":        "VClass",
+        "comb08U":       "combined_mpge",   # MPGe unrounded (falls back below)
+        "comb08":        "_comb08",
+        "city08U":       "city_mpge",
+        "city08":        "_city08",
+        "highway08U":    "highway_mpge",
+        "highway08":     "_highway08",
+        "combE":         "kwh_per_100mi",
+        "range":         "range_miles",
+        "cityE":         "range_city",
+        "highwayE":      "range_highway",
+        "co2TailpipeAGpm": "co2_tailpipe_gpm",
+        "ghgScore":      "ghg_score",
+        "smartwayScore": "smog_score",
+        "fuelCost08":    "annual_fuel_cost_usd",
+        "fuelType1":     "fuel_type",
+        "fuelType2":     "fuel_type2",
+        "phevBlended":   "is_phev",
+        "evMotor":       "ev_motor",
+    }
+    present = {k: v for k, v in col_map.items() if k in df.columns}
+    df = df.rename(columns=present)
+
+    # Prefer unrounded MPGe cols; fall back to rounded when unrounded is zero/NaN
+    for unr, fallback, out in [
+        ("combined_mpge", "_comb08",    "combined_mpge"),
+        ("city_mpge",     "_city08",    "city_mpge"),
+        ("highway_mpge",  "_highway08", "highway_mpge"),
+    ]:
+        if unr in df.columns and fallback in df.columns:
+            df[out] = df[unr].where(df[unr].notna() & (df[unr] != 0), df[fallback])
+            df.drop(columns=[c for c in [fallback] if c != out and c in df.columns],
+                    inplace=True, errors="ignore")
+
+    # Columns enriched later from OpenEV — initialise as NaN
+    for col in ["battery_capacity_kwh", "msrp_base", "charge_240v_hrs",
+                "fast_charge_minutes", "max_ac_kw", "max_dc_kw",
+                "connector_type", "acceleration_0_60"]:
+        if col not in df.columns:
+            df[col] = None
+
+    df["is_phev"] = df.get("is_phev", pd.Series(False, index=df.index)).astype(bool)
+    df = df.reset_index(drop=True)
+    log.info("  Returning %d EV rows", len(df))
+    return df
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SOURCE 2 — OpenEV Data (GitHub release, no key)
+# Community-maintained EV specs with charging details not in EPA data.
+# Docs: https://open-ev-data.github.io/
+# ══════════════════════════════════════════════════════════════════════════════
+OPENEV_RELEASE_API = (
+    "https://api.github.com/repos/open-ev-data/open-ev-data-dataset/releases/latest"
+)
+
+
+def _find_openev_json_url() -> str:
+    """Fetch the latest GitHub release and return the JSON asset download URL."""
+    log.info("── OpenEV Data: resolving latest release")
+    meta = _get(OPENEV_RELEASE_API).json()
+    assets = meta.get("assets", [])
+    for asset in assets:
+        name = asset.get("name", "")
+        if name.endswith(".json") and "open-ev-data" in name.lower():
+            url = asset["browser_download_url"]
+            log.info("  Found asset: %s", name)
+            return url
+    raise RuntimeError(
+        "Could not find JSON asset in latest OpenEV release. "
+        f"Assets found: {[a['name'] for a in assets]}"
+    )
+
+
+def _first(*values):
+    """Return first non-None, non-empty value."""
+    for v in values:
+        if v is not None and v != "" and v != []:
+            return v
+    return None
+
+
+def _obj_name(field) -> str | None:
+    """
+    OpenEV v1.24+ stores make/model as {'slug': 'tesla', 'name': 'Tesla'}.
+    Also handles plain strings for backwards compatibility.
+    """
+    if field is None:
+        return None
+    if isinstance(field, dict):
+        return field.get("name") or field.get("slug") or None
+    return str(field).strip() or None
+
+
+def _extract_openev_row(v: dict) -> dict:
+    """
+    Extract fields from one OpenEV v1.24 record.
+
+    Confirmed schema from live data:
+      make/model        → {'slug': ..., 'name': ...}
+      battery           → {'pack_capacity_kwh_net': ..., 'pack_capacity_kwh_gross': ...}
+      charging.ac       → {'max_power_kw': ...}
+      charging.dc       → {'max_power_kw': ...}
+      range.rated       → [{'cycle': 'wltp'|'epa', 'range_km': ...}]
+      charge_ports      → [{'connector': 'ccs2'|'nacs'|..., 'kind': ...}]
+      performance       → {'acceleration_0_60_mph_s': ...}
+      msrp              → not present in this dataset
+    """
+    KM_TO_MI = 0.621371
+
+    # ── Make / model ──────────────────────────────────────────────────────────
+    make  = _obj_name(v.get("make"))
+    model = _obj_name(v.get("model"))
+    year  = v.get("year")
+
+    # ── Battery ───────────────────────────────────────────────────────────────
+    bat = v.get("battery") or {}
+    batt_kwh = _float(_first(
+        bat.get("pack_capacity_kwh_net"),
+        bat.get("pack_capacity_kwh_gross"),
+        bat.get("usable_kwh"), bat.get("capacity_kwh"),
+    ))
+
+    # ── Range — rated list, prefer EPA cycle then WLTP ───────────────────────
+    range_mi = None
+    rated = (v.get("range") or {}).get("rated") or []
+    if isinstance(rated, list):
+        # Try EPA first
+        for entry in rated:
+            if isinstance(entry, dict) and entry.get("cycle") == "epa":
+                range_mi = _float(entry.get("range_km", 0)) * KM_TO_MI if entry.get("range_km") else None
+                if range_mi: break
+        # Fall back to WLTP
+        if range_mi is None:
+            for entry in rated:
+                if isinstance(entry, dict) and entry.get("range_km"):
+                    range_mi = _float(entry["range_km"]) * KM_TO_MI
+                    break
+    if range_mi:
+        range_mi = round(range_mi, 0)
+
+    # ── Charging ──────────────────────────────────────────────────────────────
+    chg    = v.get("charging") or {}
+    ac     = chg.get("ac") or {}
+    dc     = chg.get("dc") or {}
+    max_ac = _float(_first(ac.get("max_power_kw"), ac.get("max_kw")))
+    max_dc = _float(_first(dc.get("max_power_kw"), dc.get("max_kw")))
+
+    # DC fast charge time to 80% — not in this dataset, estimate if possible
+    dc_min = _float(dc.get("time_to_80_min"))
+
+    # Level 2 time to full — derive from battery/charger if not explicit
+    charge_hrs = _float(ac.get("time_to_full_h"))
+    if charge_hrs is None and batt_kwh and max_ac and max_ac > 0:
+        charge_hrs = round(batt_kwh / max_ac, 1)
+
+    # ── Connector — charge_ports list ─────────────────────────────────────────
+    connector = None
+    ports = v.get("charge_ports") or []
+    if isinstance(ports, list) and ports:
+        port = ports[0]
+        if isinstance(port, dict):
+            raw_conn = _first(port.get("connector"), port.get("standard"),
+                              port.get("type"), port.get("connector_type"))
+            if raw_conn:
+                # Normalise to friendly names
+                conn_map = {
+                    "ccs1": "CCS", "ccs2": "CCS2", "nacs": "NACS",
+                    "type2": "Type 2", "chademo": "CHAdeMO",
+                    "j1772": "J1772", "gbt": "GB/T",
                 }
-            }
-        }
-        
-        filename = f'data_summary_{self.timestamp}.json'
-        filepath = self.data_dir / filename
-        with open(filepath, 'w') as f:
-            json.dump(summary, f, indent=2, default=str)
-        
-        logger.info(f"Created summary file: {filename}")
-        return summary
-    
-    def collect_all_data(self):
-        """Run the complete data collection process"""
-        logger.info("Starting EV data collection with fixed specifications and validation...")
-        
-        # Create all datasets - any failure will stop the process
-        vehicles_df = self.create_epa_vehicles_data()
-        stations_df = self.get_charging_stations_data()  # This will fail if API doesn't work
-        sales_df = self.create_ev_sales_data()
-        
-        # Create summary
-        summary = self.create_summary_file(vehicles_df, stations_df, sales_df)
-        
-        logger.info("Data collection completed successfully!")
-        logger.info(f"Generated files in {self.data_dir}:")
-        for file in self.data_dir.glob('*.csv'):
-            logger.info(f"  - {file.name}")
-        for file in self.data_dir.glob('*.json'):
-            logger.info(f"  - {file.name}")
-        
-        return True
+                connector = conn_map.get(str(raw_conn).lower(), str(raw_conn).upper())
+
+    # ── Performance ───────────────────────────────────────────────────────────
+    perf  = v.get("performance") or {}
+    accel = _float(_first(
+        perf.get("acceleration_0_60_mph_s"),
+        perf.get("zero_to_60_mph_s"),
+        perf.get("accel_0_60"),
+    ))
+
+    # ── Price — not in OpenEV v1.24, leave as None ───────────────────────────
+    msrp = _float(_first(
+        v.get("msrp_usd"), v.get("base_price_usd"),
+        v.get("price_usd"), v.get("msrp"), v.get("price"),
+    ))
+
+    return {
+        "make":                 make,
+        "model":                model,
+        "year":                 year,
+        "battery_capacity_kwh": batt_kwh,
+        "range_miles":          range_mi,
+        "charge_240v_hrs":      charge_hrs,
+        "fast_charge_minutes":  dc_min,
+        "max_ac_kw":            max_ac,
+        "max_dc_kw":            max_dc,
+        "connector_type":       connector,
+        "acceleration_0_60":    accel,
+        "msrp_base":            msrp,
+    }
+
+
+def collect_openev() -> pd.DataFrame:
+    """Download and normalise the OpenEV JSON dataset."""
+    url = _find_openev_json_url()
+    log.info("  Downloading OpenEV dataset…")
+    raw = _get(url).json()
+
+    # Unwrap if top-level is a dict container
+    if isinstance(raw, dict):
+        for key in ("vehicles", "data", "cars", "evs", "items"):
+            if isinstance(raw.get(key), list):
+                raw = raw[key]
+                log.info("  Unwrapped JSON key '%s'", key)
+                break
+        else:
+            # Last resort: find any list value
+            for v in raw.values():
+                if isinstance(v, list) and len(v) > 0:
+                    raw = v
+                    break
+
+    if not raw:
+        log.warning("  OpenEV: empty dataset after unwrap")
+        return pd.DataFrame()
+
+    # Log first record keys to help diagnose future schema changes
+    log.info("  OpenEV first record keys: %s", list(raw[0].keys())[:15])
+
+
+    rows = [_extract_openev_row(v) for v in raw]
+    df = pd.DataFrame(rows)
+
+    # Report how many fields were actually populated
+    for col in ["make", "model", "year", "battery_capacity_kwh", "msrp_base",
+                "fast_charge_minutes", "max_dc_kw", "acceleration_0_60"]:
+        if col in df.columns:
+            filled = df[col].notna().sum()
+            log.info("  OpenEV %-25s %d/%d filled", col, filled, len(df))
+
+    log.info("  Collected %d vehicles from OpenEV Data", len(df))
+    return df
+
+
+# Make name aliases — EPA name → OpenEV name (or vice versa)
+_MAKE_ALIASES = {
+    "vw": "volkswagen",
+    "chevy": "chevrolet",
+    "mercedes": "mercedes-benz",
+    "mercedes benz": "mercedes-benz",
+    "bmw": "bmw",
+    "land rover": "land rover",
+    "rolls royce": "rolls-royce",
+    "rolls-royce": "rolls-royce",
+    "alfa romeo": "alfa romeo",
+}
+
+
+def _normalise_make(s: str) -> str:
+    s = str(s).strip().lower()
+    return _MAKE_ALIASES.get(s, s)
+
+
+def _normalise_model(s: str) -> str:
+    """Aggressively normalise model name for fuzzy join."""
+    import re
+    s = str(s).strip().lower()
+    # Remove common suffixes that differ between datasets
+    s = re.sub(r"\b(ev|electric|bev|phev|plug.in|hybrid|quattro|awd|rwd|fwd|4wd|4x4)\b", "", s)
+    # Remove trim indicators
+    s = re.sub(r"\b(base|standard|long range|performance|sport|plus|pro|max|ultra|limited|premium)\b", "", s)
+    # Collapse whitespace and hyphens
+    s = re.sub(r"[\s\-]+", " ", s).strip()
+    return s
+
+
+def _merge_openev(vehicles: pd.DataFrame, openev: pd.DataFrame) -> pd.DataFrame:
+    """
+    Left-join OpenEV into the EPA dataset.
+    Uses a three-pass strategy:
+      1. Exact join on (make, model, year)
+      2. Exact join on (make, model) — any year (handles model-year mismatches)
+      3. Fuzzy join on (make, normalised_model) — handles trim-name differences
+    """
+    log.info("── Merging OpenEV enrichment into EPA data")
+
+    enrich_cols = [c for c in [
+        "battery_capacity_kwh", "charge_240v_hrs", "fast_charge_minutes",
+        "max_ac_kw", "max_dc_kw", "connector_type",
+        "acceleration_0_60", "msrp_base",
+    ] if c in openev.columns]
+
+    if not enrich_cols:
+        log.warning("  OpenEV: no enrich columns found — skipping merge")
+        return vehicles
+
+    # ── Normalise keys ────────────────────────────────────────────────────────
+    veh = vehicles.copy()
+    oe  = openev.copy()
+
+    for df in [veh, oe]:
+        df["_make"]  = df["make"].apply(_normalise_make)
+        df["_model"] = df["model"].astype(str).str.strip().str.lower()
+        df["_model_fuzzy"] = df["_model"].apply(_normalise_model)
+
+    veh["year"] = pd.to_numeric(veh["year"], errors="coerce")
+    oe["year"]  = pd.to_numeric(oe["year"],  errors="coerce")
+
+    oe_slim = oe[["_make", "_model", "_model_fuzzy", "year"] + enrich_cols].copy()
+
+    # ── Pass 1: exact (make, model, year) ────────────────────────────────────
+    oe1 = oe_slim.drop_duplicates(["_make", "_model", "year"])
+    merged = veh.merge(oe1[["_make", "_model", "year"] + enrich_cols],
+                       on=["_make", "_model", "year"], how="left", suffixes=("", "_oe1"))
+    _fill(merged, enrich_cols, "_oe1")
+    n1 = merged[enrich_cols[0]].notna().sum()
+    log.info("  Pass 1 (exact make+model+year): %d rows enriched", n1)
+
+    # ── Pass 2: (make, model) any year ───────────────────────────────────────
+    oe2 = oe_slim.groupby(["_make", "_model"])[enrich_cols].first().reset_index()
+    merged = merged.merge(oe2, on=["_make", "_model"], how="left", suffixes=("", "_oe2"))
+    _fill(merged, enrich_cols, "_oe2")
+    n2 = merged[enrich_cols[0]].notna().sum()
+    log.info("  Pass 2 (make+model any year):   %d rows enriched", n2)
+
+    # ── Pass 3: (make, fuzzy model) ──────────────────────────────────────────
+    oe3 = oe_slim.groupby(["_make", "_model_fuzzy"])[enrich_cols].first().reset_index()
+    merged = merged.merge(oe3, on=["_make", "_model_fuzzy"], how="left", suffixes=("", "_oe3"))
+    _fill(merged, enrich_cols, "_oe3")
+    n3 = merged[enrich_cols[0]].notna().sum()
+    log.info("  Pass 3 (make+fuzzy model):       %d rows enriched", n3)
+
+    # ── Clean up helper columns ───────────────────────────────────────────────
+    merged.drop(columns=["_make", "_model", "_model_fuzzy"], inplace=True, errors="ignore")
+
+    filled = merged[enrich_cols].notna().any(axis=1).sum()
+    log.info("  Total enriched: %d/%d rows", filled, len(merged))
+
+    if filled == 0:
+        # Print diagnostic sample to help debug future schema changes
+        log.warning("  No rows enriched — printing OpenEV sample for diagnosis:")
+        log.warning("  OpenEV makes (first 10): %s", oe["_make"].unique()[:10].tolist())
+        log.warning("  EPA    makes (first 10): %s", veh["_make"].unique()[:10].tolist())
+
+    return merged
+
+
+def _fill(df: pd.DataFrame, cols: list, suffix: str) -> None:
+    """Fill NaN values in cols from col+suffix counterparts, then drop suffix cols."""
+    for col in cols:
+        oe_col = col + suffix
+        if oe_col in df.columns:
+            df[col] = df[col].combine_first(df[oe_col])
+            df.drop(columns=[oe_col], inplace=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SOURCE 3 — NREL AFDC Charging Stations
+# Free key: https://developer.nlr.gov/signup/
+# Docs: https://developer.nlr.gov/docs/transportation/alt-fuel-stations-v1/
+#
+# Note: NREL is migrating from developer.nrel.gov → developer.nlr.gov
+# (deadline April 30 2026). This script uses the new domain.
+# ══════════════════════════════════════════════════════════════════════════════
+NREL_BASE = "https://developer.nlr.gov/api/alt-fuel-stations/v1"
+
+
+def collect_stations(api_key: str, country: str = "US") -> pd.DataFrame:
+    """
+    Pull all open public EV charging stations from NREL AFDC.
+    Returns one row per station in the shape expected by app.py.
+    """
+    log.info("── NREL AFDC: collecting EV stations (%s)", country)
+
+    params = {
+        "api_key":    api_key,
+        "fuel_type":  "ELEC",
+        "status":     "E",           # E = currently open
+        "access":     "public",
+        "country":    country,
+        "limit":      "all",
+    }
+
+    r = _get(f"{NREL_BASE}.json", params=params)
+    data = r.json()
+    raw = data.get("fuel_stations", [])
+    log.info("  Raw station records: %d", len(raw))
+
+    rows = []
+    for s in raw:
+        rows.append({
+            # ── identity ─────────────────────────────────────────────────────
+            "station_id":       s.get("id"),
+            "station_name":     s.get("station_name"),
+            "street":           s.get("street_address"),
+            "city":             s.get("city"),
+            "state":            s.get("state"),
+            "zip":              s.get("zip"),
+            "country":          s.get("country"),
+            # ── location ─────────────────────────────────────────────────────
+            "latitude":         _float(s.get("latitude")),
+            "longitude":        _float(s.get("longitude")),
+            # ── network ──────────────────────────────────────────────────────
+            "network":          s.get("ev_network") or "Non-Networked",
+            "network_url":      s.get("ev_network_web"),
+            # ── access ───────────────────────────────────────────────────────
+            "access_code":      s.get("access_code"),           # public / private
+            "access_hours":     s.get("access_days_time"),
+            "facility_type":    s.get("facility_type"),
+            # ── charger counts ───────────────────────────────────────────────
+            "level1_count":     int(s.get("ev_level1_evse_num") or 0),
+            "level2_count":     int(s.get("ev_level2_evse_num") or 0),
+            "dc_fast_count":    int(s.get("ev_dc_fast_num") or 0),
+            # ── connector detail ─────────────────────────────────────────────
+            "connector_types":  s.get("ev_connector_types"),    # list or None
+            # ── metadata ─────────────────────────────────────────────────────
+            "open_date":        s.get("open_date"),
+            "updated_at":       s.get("updated_at"),
+        })
+
+    df = pd.DataFrame(rows).dropna(subset=["latitude", "longitude"])
+    log.info("  Stations with coordinates: %d", len(df))
+    return df
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Synthetic fallback (--dry-run)
+# Generates realistic-looking data without any network calls, useful for
+# testing the rest of the pipeline when you don't have API keys yet.
+# ══════════════════════════════════════════════════════════════════════════════
+def _synthetic_vehicles() -> pd.DataFrame:
+    import numpy as np
+    rng = np.random.default_rng(42)
+    makers = {
+        "Tesla":    [("Model 3", 82, 358, 40240, 138, "NACS"),
+                     ("Model Y", 82, 330, 43990, 123, "NACS"),
+                     ("Model S", 100, 405, 74990, 120, "NACS")],
+        "Hyundai":  [("IONIQ 6", 77, 361, 38615, 140, "CCS"),
+                     ("IONIQ 5", 77, 303, 41450, 114, "CCS")],
+        "Chevrolet":[("Bolt EV", 65, 259, 26500, 120, "CCS"),
+                     ("Equinox EV", 85, 319, 34995, 121, "CCS")],
+        "BMW":      [("i4 eDrive40", 84, 301, 52200, 107, "CCS")],
+        "Ford":     [("Mustang Mach-E", 91, 312, 42995, 100, "CCS"),
+                     ("F-150 Lightning", 131, 320, 49995, 78, "CCS")],
+        "Rivian":   [("R1T", 135, 314, 67500, 73, "NACS"),
+                     ("R1S", 135, 321, 75900, 71, "NACS")],
+    }
+    rows = []
+    for year in range(2019, 2026):
+        for make, models in makers.items():
+            for model, batt, rng_mi, price, mpge, conn in models:
+                noise = rng.normal(0, 0.03)
+                rows.append({
+                    "fueleconomy_id":       None,
+                    "year":                 year,
+                    "make":                 make,
+                    "model":                model,
+                    "combined_mpge":        round(mpge * (1 + noise), 1),
+                    "city_mpge":            round(mpge * 1.03 * (1 + noise), 1),
+                    "highway_mpge":         round(mpge * 0.97 * (1 + noise), 1),
+                    "kwh_per_100mi":        round(100 / mpge * 33.7, 1),
+                    "range_miles":          round(rng_mi * (1 + noise), 0),
+                    "battery_capacity_kwh": batt,
+                    "msrp_base":            price + int(year - 2019) * 500,
+                    "connector_type":       conn,
+                    "fuel_type":            "Electricity",
+                    "is_phev":              False,
+                    "trany":                "1-Speed Automatic",
+                    "drive":                "Rear-Wheel Drive",
+                    "VClass":               "Compact Cars",
+                    "charge_240v_hrs":      round(batt / 11, 1),
+                    "fast_charge_minutes":  round(batt * 0.4, 0),
+                    "max_ac_kw":            11.0,
+                    "max_dc_kw":            250.0 if make == "Tesla" else 150.0,
+                    "acceleration_0_60":    round(rng.uniform(3.5, 6.5), 1),
+                    "annual_fuel_cost_usd": round(mpge * 0.3 * 15000 / mpge, 0),
+                    "co2_tailpipe_gpm":     0,
+                    "ghg_score":            10,
+                })
+    return pd.DataFrame(rows)
+
+
+def _synthetic_stations(n: int = 5000) -> pd.DataFrame:
+    import numpy as np
+    rng = np.random.default_rng(7)
+    networks = ["ChargePoint Network", "Tesla", "Blink Network",
+                "EVgo Network", "Non-Networked", "Tesla Destination",
+                "Electrify America"]
+    weights  = [0.40, 0.20, 0.10, 0.08, 0.10, 0.07, 0.05]
+    # Rough US bounding box
+    lats = rng.uniform(25, 49, n)
+    lons = rng.uniform(-124, -67, n)
+    rows = []
+    for i in range(n):
+        network = rng.choice(networks, p=weights)
+        l2 = int(rng.integers(1, 12))
+        dc = int(rng.integers(0, 6)) if network != "Tesla Destination" else 0
+        rows.append({
+            "station_id":    i + 1,
+            "station_name":  f"{network} Station #{i+1}",
+            "city":          "Various",
+            "state":         "CA",
+            "country":       "US",
+            "latitude":      round(float(lats[i]), 6),
+            "longitude":     round(float(lons[i]), 6),
+            "network":       network,
+            "access_code":   "public",
+            "level1_count":  0,
+            "level2_count":  l2,
+            "dc_fast_count": dc,
+            "connector_types": ["CCS", "J1772"],
+        })
+    return pd.DataFrame(rows)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Save helpers
+# ══════════════════════════════════════════════════════════════════════════════
+def _save(df: pd.DataFrame, name: str) -> Path:
+    path = RAW_DIR / f"{name}_{STAMP}.csv"
+    df.to_csv(path, index=False)
+    log.info("  Saved %s → %s (%d rows)", name, path, len(df))
+    return path
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CLI
+# ══════════════════════════════════════════════════════════════════════════════
+def _parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--nrel-key",      metavar="KEY",
+                   help="NREL API key (free at developer.nlr.gov/signup)")
+    p.add_argument("--start-year",    type=int, default=2019,
+                   help="First model year to collect (default: 2019)")
+    p.add_argument("--include-openev", action="store_true",
+                   help="Download and merge OpenEV Data specs")
+    p.add_argument("--dry-run",       action="store_true",
+                   help="Generate synthetic data only — no network calls")
+    p.add_argument("--country",       default="US",
+                   help="Country code for NREL station pull (default: US)")
+    return p.parse_args()
+
+
+def main() -> None:
+    args = _parse_args()
+
+    # Load .env so NREL_API_KEY is available as an env var.
+    # CLI flag takes priority; .env is the fallback.
+    load_dotenv()
+    nrel_key = args.nrel_key or os.environ.get("NREL_API_KEY")
+    if nrel_key and not args.nrel_key:
+        log.info("  Using NREL_API_KEY from .env")
+
+    log.info("EV Data Collection — %s", STAMP)
+    log.info("Output directory: %s", RAW_DIR.resolve())
+
+    # ── Vehicles ──────────────────────────────────────────────────────────────
+    if args.dry_run:
+        log.info("── DRY RUN: generating synthetic vehicle data")
+        vehicles = _synthetic_vehicles()
+    else:
+        vehicles = collect_vehicles_fe(start_year=args.start_year)
+
+        if args.include_openev:
+            try:
+                openev = collect_openev()
+                vehicles = _merge_openev(vehicles, openev)
+            except Exception as e:
+                log.warning("OpenEV merge failed (%s) — continuing without it", e)
+
+    _save(vehicles, "epa_vehicles")
+
+    # ── Stations ──────────────────────────────────────────────────────────────
+    if args.dry_run:
+        log.info("── DRY RUN: generating synthetic station data")
+        stations = _synthetic_stations()
+    elif nrel_key:
+        stations = collect_stations(api_key=nrel_key, country=args.country)
+    else:
+        log.warning(
+            "No --nrel-key provided. Skipping station collection.\n"
+            "  Get a free key at: https://developer.nlr.gov/signup/\n"
+            "  Then rerun with: python data_collection.py --nrel-key YOUR_KEY"
+        )
+        stations = pd.DataFrame()
+
+    if not stations.empty:
+        _save(stations, "charging_stations")
+
+    # ── Summary ───────────────────────────────────────────────────────────────
+    log.info("")
+    log.info("Collection complete.")
+    log.info("  Vehicles : %d rows", len(vehicles))
+    log.info("  Stations : %d rows", len(stations) if not stations.empty else 0)
+    if not args.dry_run and not nrel_key:
+        log.info("  (Run with --nrel-key to collect station data)")
+    log.info("")
+    log.info("Next step: python ev_analysis.py")
+
 
 if __name__ == "__main__":
-    try:
-        collector = EVDataCollector()
-        success = collector.collect_all_data()
-        
-        if success:
-            print("\n🎉 Data collection completed! You can now run your Jupyter notebook analysis.")
-            print("\n✅ All fixes applied:")
-            print("   - Accurate manufacturer-specific pricing (Rivian: $69,900-$89,900)")
-            print("   - Multiple trim levels per model with realistic variations")
-            print("   - Correct MPGe terminology (not MPG)")
-            print("   - Highway MPGe properly calculated as LOWER than city (EV physics)")
-            print("   - Proper vehicle class assignment")
-            print("   - Data validation with warnings for inconsistencies")
-            print("   - Accurate charge times based on onboard charger capacity")
-            print("   - Source attribution (EPA vs Manufacturer specs)")
-            print("   - Price per kWh calculated for analysis")
-            print("   - Multiple models per manufacturer (6+ per brand)")
-            print("\n✅ All charging station data is from the real NREL API.")
-        
-    except ValueError as e:
-        print(f"\n❌ Data collection failed: {e}")
-        print("\nTo fix this:")
-        print("1. Get a free API key from: https://developer.nrel.gov/signup/")
-        print("2. Set it as an environment variable:")
-        print("   export NREL_API_KEY='your_api_key_here'")
-        print("3. Or in Windows: set NREL_API_KEY=your_api_key_here")
-        print("4. Then run this script again")
-    except Exception as e:
-        print(f"\n❌ Unexpected error: {e}")
-        print("Check the logs above for details.")
+    main()

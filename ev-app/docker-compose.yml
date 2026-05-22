@@ -1,0 +1,29 @@
+version: '3.9'
+
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount your project's data so the container reads live files
+      - ../data:/app/data:ro
+      - ../outputs:/app/outputs:ro
+    environment:
+      - PROCESSED_DIR=outputs/processed_data
+      - RAW_DIR=data/raw
+    restart: unless-stopped
+
+  # Dev-only: Vite dev server with HMR + API proxy
+  frontend-dev:
+    image: node:20-alpine
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+    ports:
+      - "5173:5173"
+    command: sh -c "npm install --legacy-peer-deps && npm run dev -- --host"
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    profiles:
+      - dev   # only starts with: docker compose --profile dev up
