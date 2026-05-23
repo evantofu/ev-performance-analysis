@@ -182,4 +182,4 @@ ev-app/frontend/node_modules/
 ev-app/frontend/dist/
 data/raw/*.csv
 outputs/
-.env
+.env!outputs/processed_data/

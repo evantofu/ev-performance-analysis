@@ -1,0 +1,17 @@
+{
+  "export_date": "20260522",
+  "datasets": {
+    "vehicles": {
+      "rows": 1631,
+      "columns": 90
+    },
+    "stations": {
+      "rows": 80203,
+      "columns": 20
+    },
+    "sales": {
+      "rows": 96,
+      "columns": 5
+    }
+  }
+}

@@ -1,0 +1,46 @@
+[
+  {
+    "cluster_id": 0,
+    "count": 374,
+    "avg_mpge": 109.0,
+    "avg_range": 291.0,
+    "top_makes": [
+      "Rivian",
+      "Porsche",
+      "BMW"
+    ]
+  },
+  {
+    "cluster_id": 1,
+    "count": 242,
+    "avg_mpge": 88.7,
+    "avg_range": 259.9,
+    "top_makes": [
+      "BMW",
+      "Rivian",
+      "Porsche"
+    ]
+  },
+  {
+    "cluster_id": 2,
+    "count": 98,
+    "avg_mpge": 88.2,
+    "avg_range": 327.2,
+    "top_makes": [
+      "Rivian",
+      "Volvo",
+      "Audi"
+    ]
+  },
+  {
+    "cluster_id": 3,
+    "count": 305,
+    "avg_mpge": 69.6,
+    "avg_range": 303.0,
+    "top_makes": [
+      "BMW",
+      "Rivian",
+      "Tesla"
+    ]
+  }
+]
