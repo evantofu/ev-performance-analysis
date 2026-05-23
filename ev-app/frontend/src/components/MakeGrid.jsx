@@ -53,8 +53,8 @@ function VehicleRow({ vehicle, isSelected, onToggle, compact = false }) {
         display: 'flex', alignItems: 'center', gap: 10,
         padding: compact ? '6px 10px' : '10px 12px',
         borderRadius: 6,
-        background: isSelected ? 'var(--amber-glow)' : 'transparent',
-        border: `1px solid ${isSelected ? 'var(--amber)' : 'var(--border)'}`,
+        background: isSelected ? 'var(--terra-glow)' : 'transparent',
+        border: `1px solid ${isSelected ? 'var(--terra)' : 'var(--border)'}`,
         cursor: 'pointer', transition: 'all 0.12s',
       }}
       onMouseEnter={e => { if (!isSelected) e.currentTarget.style.borderColor = 'var(--border-hover)' }}
@@ -62,37 +62,48 @@ function VehicleRow({ vehicle, isSelected, onToggle, compact = false }) {
     >
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{
-          fontFamily: 'var(--font-display)', fontSize: compact ? 12 : 13,
-          fontWeight: 600, color: 'var(--text)',
+          fontFamily: 'var(--font-display)', fontSize: compact ? 13 : 15,
+          fontWeight: 700, color: 'var(--text)', marginBottom: 4,
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }}>
           {vehicle.model}
         </div>
-        <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
-          <span style={{ color: 'var(--amber)' }}>{Math.round(vehicle.combined_mpge)} MPGe</span>
-          {' · '}
-          <span style={{ color: '#22c55e' }}>{Math.round(vehicle.range_miles)} mi</span>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--terra)' }}>
+            {Math.round(vehicle.combined_mpge)} MPGe
+          </span>
+          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--green)' }}>
+            {Math.round(vehicle.range_miles)} mi
+          </span>
           {vehicle.battery_capacity_kwh && (
-            <>{' · '}{Math.round(vehicle.battery_capacity_kwh)} kWh</>
+            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+              {Math.round(vehicle.battery_capacity_kwh)} kWh
+            </span>
           )}
           {vehicle.connector_type && (
-            <>{' · '}<span style={{ color: 'var(--text-dim)' }}>{vehicle.connector_type}</span></>
+            <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>{vehicle.connector_type}</span>
           )}
         </div>
       </div>
       {isSelected && (
-        <span style={{ fontSize: 10, color: 'var(--amber)', whiteSpace: 'nowrap' }}>✓ selected</span>
+        <span style={{ fontSize: 10, color: 'var(--terra)', whiteSpace: 'nowrap' }}>✓ selected</span>
       )}
     </div>
   )
 }
 
 // ─── ModelGroup ───────────────────────────────────────────────────────────────
-function ModelGroup({ year, base, vehicles }) {
+function ModelGroup({ year, base, vehicles, sortBy = 'combined_mpge' }) {
   const { selected, toggleSelect } = useStore()
   const [expanded, setExpanded] = useState(false)
 
-  const best = [...vehicles].sort((a, b) => b.combined_mpge - a.combined_mpge)[0]
+  function trimVal(v) {
+    if (sortBy === 'year')        return v.year ?? 0
+    if (sortBy === 'range_miles') return v.range_miles ?? 0
+    return v.combined_mpge ?? 0
+  }
+
+  const best = [...vehicles].sort((a, b) => trimVal(b) - trimVal(a))[0]
   const hasMultiple = vehicles.length > 1
   const isAnySelected = vehicles.some(v => selected.find(s => s.id === v.id))
   const isBestSelected = !!selected.find(s => s.id === best.id)
@@ -107,9 +118,9 @@ function ModelGroup({ year, base, vehicles }) {
             onClick={() => toggleSelect(best)}
             style={{
               display: 'flex', alignItems: 'center', gap: 10,
-              padding: '10px 12px', borderRadius: 6,
-              background: isBestSelected ? 'var(--amber-glow)' : 'transparent',
-              border: `1px solid ${isBestSelected ? 'var(--amber)' : 'var(--border)'}`,
+              padding: '14px 16px', borderRadius: 8,
+              background: isBestSelected ? 'var(--terra-glow)' : 'transparent',
+              border: `1px solid ${isBestSelected ? 'var(--terra)' : 'var(--border)'}`,
               cursor: 'pointer', transition: 'all 0.12s',
             }}
             onMouseEnter={e => { if (!isBestSelected) e.currentTarget.style.borderColor = 'var(--border-hover)' }}
@@ -117,26 +128,33 @@ function ModelGroup({ year, base, vehicles }) {
           >
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{
-                fontFamily: 'var(--font-display)', fontSize: 13,
-                fontWeight: 600, color: 'var(--text)',
+                fontFamily: 'var(--font-display)', fontSize: 16,
+                fontWeight: 700, color: 'var(--text)', marginBottom: 5,
                 whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
               }}>
                 {displayName}
               </div>
-              <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
-                <span style={{ color: 'var(--amber)' }}>{Math.round(best.combined_mpge)} MPGe</span>
-                {' · '}
-                <span style={{ color: '#22c55e' }}>{Math.round(best.range_miles)} mi</span>
+              <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--terra)' }}>
+                  {Math.round(best.combined_mpge)} MPGe
+                </span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--green)' }}>
+                  {Math.round(best.range_miles)} mi
+                </span>
                 {best.battery_capacity_kwh && (
-                  <>{' · '}{Math.round(best.battery_capacity_kwh)} kWh</>
+                  <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                    {Math.round(best.battery_capacity_kwh)} kWh
+                  </span>
                 )}
                 {hasMultiple && (
-                  <span style={{ color: 'var(--text-dim)' }}> · {vehicles.length} trims</span>
+                  <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+                    {vehicles.length} trims available
+                  </span>
                 )}
               </div>
             </div>
             {isBestSelected && (
-              <span style={{ fontSize: 10, color: 'var(--amber)', whiteSpace: 'nowrap' }}>✓ selected</span>
+              <span style={{ fontSize: 10, color: 'var(--terra)', whiteSpace: 'nowrap' }}>✓ selected</span>
             )}
           </div>
         </div>
@@ -146,7 +164,7 @@ function ModelGroup({ year, base, vehicles }) {
             onClick={() => setExpanded(e => !e)}
             style={{
               padding: '0 10px', borderRadius: 6, cursor: 'pointer',
-              border: `1px solid ${isAnySelected ? 'var(--amber)' : 'var(--border)'}`,
+              border: `1px solid ${isAnySelected ? 'var(--terra)' : 'var(--border)'}`,
               background: expanded ? 'var(--surface-2)' : 'none',
               color: 'var(--text-muted)', fontSize: 10,
               fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap',
@@ -167,7 +185,7 @@ function ModelGroup({ year, base, vehicles }) {
           border: '1px solid var(--border)', borderRadius: 6,
         }}>
           {[...vehicles]
-            .sort((a, b) => b.combined_mpge - a.combined_mpge)
+            .sort((a, b) => trimVal(b) - trimVal(a))
             .map(v => (
               <VehicleRow
                 key={v.id}
@@ -185,7 +203,7 @@ function ModelGroup({ year, base, vehicles }) {
 }
 
 // ─── MakeGrid ─────────────────────────────────────────────────────────────────
-export function MakeGrid({ vehicles, defaultExpanded = 3 }) {
+export function MakeGrid({ vehicles, defaultExpanded = 0, sortBy = 'combined_mpge' }) {
   // baseModelMap: { rawModelName → cleanBaseName }
   // Starts null (loading), falls back to regex if API fails.
   const [baseModelMap, setBaseModelMap] = useState(null)
@@ -222,8 +240,19 @@ export function MakeGrid({ vehicles, defaultExpanded = 3 }) {
     byMake[v.make][key].push(v)
   }
 
+  // Best value for a group of vehicles under the current sort field
+  function bestVal(vlist) {
+    if (sortBy === 'year') return Math.max(...vlist.map(v => v.year ?? 0))
+    if (sortBy === 'range_miles') return Math.max(...vlist.map(v => v.range_miles ?? 0))
+    return Math.max(...vlist.map(v => v.combined_mpge ?? 0))
+  }
+
   const makes = Object.entries(byMake)
-    .sort((a, b) => Object.keys(b[1]).length - Object.keys(a[1]).length)
+    .sort((a, b) => {
+      const bestA = Math.max(...Object.values(a[1]).map(bestVal))
+      const bestB = Math.max(...Object.values(b[1]).map(bestVal))
+      return bestB - bestA
+    })
 
   const [expanded, setExpanded] = useState(new Set(
     makes.slice(0, defaultExpanded).map(([make]) => make)
@@ -297,15 +326,21 @@ export function MakeGrid({ vehicles, defaultExpanded = 3 }) {
             {isOpen && (
               <div style={{ paddingLeft: 8 }}>
                 {Object.entries(modelYearGroups)
-                  .sort(([keyA], [keyB]) => {
-                    const [yearA, baseA] = keyA.split('||')
-                    const [yearB, baseB] = keyB.split('||')
-                    return Number(yearB) - Number(yearA) || baseA.localeCompare(baseB)
+                  .sort(([keyA, trimsA], [keyB, trimsB]) => {
+                    if (sortBy === 'year') {
+                      const [yearA] = keyA.split('||')
+                      const [yearB] = keyB.split('||')
+                      return Number(yearB) - Number(yearA)
+                    }
+                    const field = sortBy === 'range_miles' ? 'range_miles' : 'combined_mpge'
+                    const bestA = Math.max(...trimsA.map(v => v[field] ?? 0))
+                    const bestB = Math.max(...trimsB.map(v => v[field] ?? 0))
+                    return bestB - bestA
                   })
                   .map(([key, trims]) => {
                     const [year, base] = key.split('||')
                     return (
-                      <ModelGroup key={key} year={year} base={base} vehicles={trims} />
+                      <ModelGroup key={key} year={year} base={base} vehicles={trims} sortBy={sortBy} />
                     )
                   })
                 }

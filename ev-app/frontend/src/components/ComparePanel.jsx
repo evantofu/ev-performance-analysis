@@ -21,7 +21,32 @@ function fmt(value, unit) {
 
 export function ComparePanel() {
   const { selected, clearSelected } = useStore()
-  if (selected.length === 0) return null
+
+  if (selected.length === 0) {
+    return (
+      <div className="card" style={{
+        marginBottom: 20, borderStyle: 'dashed',
+        display: 'flex', alignItems: 'center', gap: 20, padding: '20px 24px',
+      }}>
+        <div style={{
+          width: 40, height: 40, borderRadius: '50%',
+          background: 'var(--surface-2)', display: 'flex',
+          alignItems: 'center', justifyContent: 'center',
+          fontSize: 20, flexShrink: 0,
+        }}>↕</div>
+        <div>
+          <div style={{ fontFamily: 'var(--font-display)', fontSize: 16,
+                        fontWeight: 700, marginBottom: 4 }}>
+            Select vehicles to compare
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6 }}>
+            Click any vehicle below to select it. Select a second to compare
+            range, efficiency, battery, and charging side by side.
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   const [a, b] = selected
 
@@ -89,7 +114,7 @@ export function ComparePanel() {
       {/* Data coverage note */}
       {(a?.battery_capacity_kwh == null || (b && b?.battery_capacity_kwh == null)) && (
         <p style={{ marginTop: 12, fontSize: 10, color: 'var(--text-muted)' }}>
-          Some specs unavailable — battery & charging data covers ~229 vehicles
+          Some specs unavailable — battery & charging data covers ~230 vehicles
           (Tesla, Hyundai, BMW, Audi, VW, Rivian have best coverage).
           Use the <strong>Full specs</strong> filter to compare only enriched vehicles.
         </p>

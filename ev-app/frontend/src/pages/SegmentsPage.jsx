@@ -33,6 +33,14 @@ export function SegmentsPage() {
     ? vehicles.filter(v => Math.round(v.cluster) === activeSeg)
     : []
 
+  // Pre-compute counts from the actual loaded vehicle list so card count
+  // matches drill-down count — avoids mismatch with seg.count from API
+  const segCounts = {}
+  for (const v of vehicles) {
+    const c = Math.round(v.cluster)
+    if (!isNaN(c)) segCounts[c] = (segCounts[c] ?? 0) + 1
+  }
+
   // Bar chart comparing avg MPGe and avg range per segment
   const segNames  = segments.map(s => PROFILES[s.cluster_id]?.name ?? `Seg ${s.cluster_id}`)
   const segColors = segments.map(s => COLORS[s.cluster_id] ?? '#888')
@@ -56,13 +64,13 @@ export function SegmentsPage() {
 
   const barLayout = {
     paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
-    font: { family: 'DM Mono, monospace', color: '#94a3b8', size: 11 },
-    yaxis: { title: 'Average MPGe', gridcolor: '#1a1f2b', zerolinecolor: '#1a1f2b',
-             range: [0, maxMpge * 1.15] },
+    font: { family: 'Inter, system-ui, sans-serif', color: '#7a7670', size: 11 },
+    yaxis: { title: 'Average MPGe', gridcolor: '#ebe5de', zerolinecolor: '#ebe5de',
+             range: [0, maxMpge * 1.18] },
     xaxis: { tickfont: { size: 12 } },
     margin: { l: 52, r: 16, t: 36, b: 48 },
     showlegend: false,
-    title: { text: 'Efficiency by Segment', font: { size: 13, color: '#94a3b8' } },
+    title: { text: 'Efficiency by segment', font: { size: 13, color: '#7a7670' } },
   }
 
   const rangeData = [
@@ -81,9 +89,9 @@ export function SegmentsPage() {
 
   const rangeLayout = {
     ...barLayout,
-    yaxis: { title: 'Average Range (miles)', gridcolor: '#1a1f2b', zerolinecolor: '#1a1f2b',
-             range: [0, maxRange * 1.15] },
-    title: { text: 'Range by Segment', font: { size: 13, color: '#94a3b8' } },
+    yaxis: { title: 'Average Range (miles)', gridcolor: '#ebe5de', zerolinecolor: '#ebe5de',
+             range: [0, maxRange * 1.18] },
+    title: { text: 'Range by segment', font: { size: 13, color: '#7a7670' } },
   }
 
   return (
@@ -95,7 +103,7 @@ export function SegmentsPage() {
         </div>
         <p style={{ color: 'var(--text-muted)', fontSize: 13, maxWidth: 560, lineHeight: 1.7 }}>
           {vehicles.length.toLocaleString()} electric vehicles grouped into{' '}
-          <strong style={{ color: 'var(--amber)' }}>4 buyer profiles</strong>.
+          <strong style={{ color: 'var(--terra)' }}>4 buyer profiles</strong>.
           Click a profile to explore its vehicles.
         </p>
       </div>
@@ -109,7 +117,7 @@ export function SegmentsPage() {
           return (
             <div key={cid} className="card"
               style={{
-                borderTopColor: color, borderTopWidth: 3, cursor: 'pointer',
+                borderLeftColor: color, borderLeftWidth: 3,  cursor: 'pointer',
                 opacity: activeSeg !== null && !isActive ? 0.4 : 1,
                 transition: 'all 0.15s',
                 transform: isActive ? 'translateY(-2px)' : 'none',
@@ -146,7 +154,7 @@ export function SegmentsPage() {
               <div style={{ fontSize: 10, color: isActive ? color : 'var(--text-muted)' }}>
                 {isActive
                   ? `▼ ${drillVehicles.length} vehicles below`
-                  : `${seg?.count ?? '—'} vehicles · click to explore`}
+                  : `${segCounts[+cid] ?? '—'} vehicles · click to explore`}
               </div>
             </div>
           )
@@ -175,7 +183,7 @@ export function SegmentsPage() {
           {drillVehicles.length === 0 ? (
             <div className="empty">No vehicles found.</div>
           ) : (
-            <MakeGrid vehicles={drillVehicles} defaultExpanded={0} />
+            <MakeGrid vehicles={drillVehicles} />
           )}
         </div>
       )}

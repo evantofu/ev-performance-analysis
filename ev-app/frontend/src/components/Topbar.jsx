@@ -4,14 +4,14 @@ export function Topbar() {
   return (
     <header className="topbar">
       <NavLink to="/" className="logo">
-        EV<span>EXPLORER</span>
+        EV <span>Explorer</span>
       </NavLink>
       <nav className="nav">
         {[
-          ['/compare',   'Compare'],
-          ['/chargers',  'Chargers'],
-          ['/segments',  'Segments'],
-          ['/trends',    'Trends'],
+          ['/compare',  'Compare'],
+          ['/chargers', 'Chargers'],
+          ['/segments', 'Segments'],
+          ['/trends',   'Trends'],
         ].map(([to, label]) => (
           <NavLink
             key={to}

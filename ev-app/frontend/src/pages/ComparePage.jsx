@@ -56,7 +56,7 @@ export function ComparePage() {
       sort_by:     filters.sort_by,
       sort_desc:   filters.sort_by !== 'msrp_base',
       has_battery: filters.full_specs  ? true : null,
-      min_year:    filters.current_only ? 2022 : null,
+      min_year:    filters.current_only ? new Date().getFullYear() : null,
       limit:       2000,
     }
     api.vehicles(params)
@@ -103,12 +103,12 @@ export function ComparePage() {
 
   const plotLayout = {
     paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
-    font: { family: 'DM Mono, monospace', color: '#94a3b8', size: 11 },
-    xaxis: { title: 'Efficiency (MPGe)', gridcolor: '#1a1f2b', zerolinecolor: '#1a1f2b' },
-    yaxis: { title: 'Range (miles)',      gridcolor: '#1a1f2b', zerolinecolor: '#1a1f2b' },
-    legend: { bgcolor: 'rgba(18,21,28,0.9)', bordercolor: '#1a1f2b',
-              borderwidth: 1, font: { size: 10 }, orientation: 'h', y: -0.22 },
-    margin: { l: 48, r: 16, t: 16, b: 90 },
+    font: { family: 'Inter, system-ui, sans-serif', color: '#7a7670', size: 11 },
+    xaxis: { title: 'Efficiency (MPGe)', gridcolor: '#ebe5de', zerolinecolor: '#ebe5de' },
+    yaxis: { title: 'Range (miles)',      gridcolor: '#ebe5de', zerolinecolor: '#ebe5de' },
+    legend: { bgcolor: 'rgba(255,255,255,0.95)', bordercolor: '#e0d8d0',
+              borderwidth: 1, font: { size: 10 }, orientation: 'h', y: -0.32 },
+    margin: { l: 48, r: 16, t: 16, b: 110 },
     hovermode: 'closest', showlegend: segIds.length > 0,
   }
 
@@ -186,7 +186,7 @@ export function ComparePage() {
               Current models only
             </label>
             <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 4 }}>
-              2022 and newer
+              {new Date().getFullYear()} and newer
             </div>
           </div>
 
@@ -281,7 +281,7 @@ export function ComparePage() {
           ) : vehicles.length === 0 ? (
             <div className="empty">No vehicles match your filters.</div>
           ) : (
-            <MakeGrid vehicles={vehicles} defaultExpanded={0} />
+            <MakeGrid vehicles={vehicles} sortBy={filters.sort_by} />
           )}
         </div>
       </div>

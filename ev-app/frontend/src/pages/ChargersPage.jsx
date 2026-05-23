@@ -37,18 +37,22 @@ export function ChargersPage() {
 
   const networks = networksData?.map(n => n.network) ?? []
 
+  const filtersRef = useRef(stationFilters)
+  useEffect(() => { filtersRef.current = stationFilters }, [stationFilters])
+
   // ── Fetch stations for current map bounds ──────────────────────────────────
   function fetchForBounds(map) {
     const b = map.getBounds()
+    const f = filtersRef.current
     setLoading(true)
     api.stations({
       lat_min: b.getSouth(),
       lat_max: b.getNorth(),
       lon_min: b.getWest(),
       lon_max: b.getEast(),
-      dc_fast_only: stationFilters.dc_fast_only,
-      network: stationFilters.network ?? undefined,
-      state:   stationFilters.state   ?? undefined,
+      dc_fast_only: f.dc_fast_only,
+      network: f.network ?? undefined,
+      state:   f.state   ?? undefined,
       limit: 2000,
     })
       .then(d => { setStations(d.results ?? []); setTotal(d.total ?? 0) })
