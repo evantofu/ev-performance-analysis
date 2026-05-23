@@ -178,8 +178,14 @@ __marimo__/
 # macOS
 .DS_Store
 
+# Frontend build artifacts
 ev-app/frontend/node_modules/
 ev-app/frontend/dist/
+
+# Raw source data (large, re-downloadable)
 data/raw/*.csv
-outputs/
-.env!outputs/processed_data/
+
+# Generated figures (reproducible, not needed for deployment)
+outputs/figures/
+
+# Keep all processed_data/ for Railway deployment
