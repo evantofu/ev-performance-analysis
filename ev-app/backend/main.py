@@ -30,7 +30,6 @@ import pandas as pd
 import numpy as np
 from dotenv import load_dotenv
 load_dotenv()  # loads .env from cwd or parent dirs
-print("ANTHROPIC_API_KEY loaded:", bool(os.getenv("ANTHROPIC_API_KEY")))
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -47,13 +46,19 @@ app.add_middleware(
 )
 
 # ── Data paths ────────────────────────────────────────────────────────────────
-PROCESSED_DIR = Path(os.getenv("PROCESSED_DIR", "outputs/processed_data"))
-RAW_DIR       = Path(os.getenv("RAW_DIR",       "data/raw"))
-# Resolve to absolute paths based on cwd at startup
-if not PROCESSED_DIR.is_absolute():
-    PROCESSED_DIR = (Path(__file__).parent / PROCESSED_DIR).resolve()
-if not RAW_DIR.is_absolute():
-    RAW_DIR = (Path(__file__).parent / RAW_DIR).resolve()
+# Path resolution works for both local dev and Docker:
+# - Docker: /app/outputs/processed_data (copied by Dockerfile)
+# - Local:  repo_root/outputs/processed_data (3 levels up from ev-app/backend/)
+_HERE      = Path(__file__).parent.resolve()
+_REPO_ROOT = _HERE.parent.parent  # ev-app/backend → ev-app → repo root
+_DOCKER_DATA = _HERE / "outputs" / "processed_data"  # Docker path
+
+PROCESSED_DIR = Path(os.getenv("PROCESSED_DIR",
+    str(_DOCKER_DATA if _DOCKER_DATA.exists()
+        else _REPO_ROOT / "outputs" / "processed_data")))
+RAW_DIR = Path(os.getenv("RAW_DIR",
+    str(_HERE / "data" / "raw" if (_HERE / "data" / "raw").exists()
+        else _REPO_ROOT / "data" / "raw")))
 
 
 def _latest(directory: Path, pattern: str) -> Path:
@@ -192,7 +197,8 @@ def vehicles(
     year:       Optional[int]   = Query(None, description="Model year"),
     min_year:   Optional[int]   = Query(None, description="Minimum model year"),
     cluster:    Optional[int]   = Query(None, description="GMM segment id"),
-    has_battery: Optional[bool] = Query(None, description="Only vehicles with battery_capacity_kwh"),
+    has_battery:  Optional[bool] = Query(None, description="Only vehicles with battery_capacity_kwh"),
+    dedup_models: bool           = Query(False, description="One row per base model (latest year)"),
     sort_by:    str             = Query("combined_mpge", description="Sort field"),
     sort_desc:  bool            = Query(True),
     limit:      int             = Query(200, le=2000),
@@ -212,6 +218,26 @@ def vehicles(
         df = df[df["year"] == year]
     if min_year is not None and "year" in df.columns:
         df = df[df["year"] >= min_year]
+
+    # dedup_models: collapse to one row per make+base_model (latest year)
+    # This is what consumers actually want — one card per car, not per trim
+    if dedup_models and "model" in df.columns:
+        import re as _re
+        _TRIM = _re.compile(
+            r"\b(long range|standard range|standard|performance|extended range|extended|"
+            r"plus|pro|max|ultra|premium|limited|elite|gt|sport|turbo s|turbo|plaid|"
+            r"awd|rwd|fwd|4wd|dual motor|single motor|tri motor|"
+            r"cross turismo|sportback|avant|allroad|coupe|cabriolet|"
+            r"\d+in|\d+\s*inch|\(.*?\)|\d+[dwh]|kwh|kw)\b.*",
+            _re.IGNORECASE
+        )
+        def _base(m):
+            m = _TRIM.sub("", str(m)).strip()
+            return _re.sub(r"  +", " ", m).strip().lower()
+        df["_base"] = df["model"].apply(_base)
+        df["_mk"]   = df["make"].str.strip().str.lower()
+        df = df.sort_values("year", ascending=False).drop_duplicates(subset=["_mk", "_base"])
+        df = df.drop(columns=["_base", "_mk"], errors="ignore")
     if cluster is not None and "cluster" in df.columns:
         df = df[df["cluster"] == cluster]
     if has_battery and "battery_capacity_kwh" in df.columns:
@@ -264,7 +290,7 @@ def stations_nearby(
     lon:          float = Query(..., description="Longitude"),
     radius_km:    float = Query(25, description="Search radius in km"),
     dc_fast_only: bool  = Query(False),
-    limit: Optional[int] = Query(None, le=50000),
+    limit:        int   = Query(200, le=1000),
 ):
     df = _load_stations().copy()
     df = df.dropna(subset=["latitude", "longitude"])
@@ -272,19 +298,10 @@ def stations_nearby(
     if dc_fast_only and "dc_fast_count" in df.columns:
         df = df[df["dc_fast_count"] > 0]
 
-    # Vectorised haversine — ~100x faster than row-by-row .apply()
-    R = 6371.0
-    lat1, lon1 = radians(lat), radians(lon)
-    phi2 = np.radians(df["latitude"].to_numpy())
-    lam2 = np.radians(df["longitude"].to_numpy())
-    dphi = phi2 - lat1
-    dlam = lam2 - lon1
-    a = np.sin(dphi / 2) ** 2 + np.cos(lat1) * np.cos(phi2) * np.sin(dlam / 2) ** 2
-    df["distance_km"] = 2 * R * np.arcsin(np.sqrt(a))
-
-    nearby = df[df["distance_km"] <= radius_km].sort_values("distance_km")
-    if limit:
-        nearby = nearby.head(limit)
+    df["distance_km"] = df.apply(
+        lambda r: _haversine(lat, lon, r["latitude"], r["longitude"]), axis=1
+    )
+    nearby = df[df["distance_km"] <= radius_km].sort_values("distance_km").head(limit)
 
     cols = [c for c in [
         "station_id", "station_name", "city", "state", "network",
@@ -307,19 +324,14 @@ def networks():
 
 @app.get("/api/stations")
 def stations(
-    city:         Optional[str]   = Query(None),
-    state:        Optional[str]   = Query(None),
-    network:      Optional[str]   = Query(None),
-    dc_fast_only: bool            = Query(False),
-    lat_min:      Optional[float] = Query(None, description="Bounding box south"),
-    lat_max:      Optional[float] = Query(None, description="Bounding box north"),
-    lon_min:      Optional[float] = Query(None, description="Bounding box west"),
-    lon_max:      Optional[float] = Query(None, description="Bounding box east"),
-    limit:        int             = Query(500, le=5000),
-    offset:       int             = Query(0),
+    city:        Optional[str]  = Query(None),
+    state:       Optional[str]  = Query(None),
+    network:     Optional[str]  = Query(None),
+    dc_fast_only: bool          = Query(False),
+    limit:       int            = Query(500, le=5000),
+    offset:      int            = Query(0),
 ):
     df = _load_stations().copy()
-    df = df.dropna(subset=["latitude", "longitude"])
 
     if city:
         df = df[df["city"].str.lower() == city.lower()]
@@ -329,14 +341,6 @@ def stations(
         df = df[df["network"].str.lower().str.contains(network.lower(), na=False)]
     if dc_fast_only and "dc_fast_count" in df.columns:
         df = df[df["dc_fast_count"] > 0]
-    if lat_min is not None:
-        df = df[df["latitude"] >= lat_min]
-    if lat_max is not None:
-        df = df[df["latitude"] <= lat_max]
-    if lon_min is not None:
-        df = df[df["longitude"] >= lon_min]
-    if lon_max is not None:
-        df = df[df["longitude"] <= lon_max]
 
     total = len(df)
     page  = df.iloc[offset : offset + limit]
@@ -409,114 +413,6 @@ def trends():
     yearly["avg_mpge"] = yearly["avg_mpge"].round(1)
     return _df_to_records(yearly)
 
-# ── Claude batch normalizer ───────────────────────────────────────────────────
-from anthropic import AsyncAnthropic
-from pydantic import BaseModel as _BaseModel
-
-_anthropic = AsyncAnthropic()
-
-BASE_MODEL_MAP_PATH = PROCESSED_DIR / "base_model_map.json"
-_NORMALIZE_BATCH_SIZE = 50
-
-_NORMALIZE_PROMPT = """\
-You are normalizing EV model names for a car comparison app.
-Given the list of raw model name strings below, return a single JSON object where:
-- Each KEY is the exact raw model name string (copied verbatim)
-- Each VALUE is the clean base model name with ALL of the following removed:
-  trim levels (Long Range, Performance, Plus, Pro, Max, Limited, GT, Sport, Plaid, Elite, Ultra, Premium…)
-  drivetrain codes (AWD, RWD, FWD, 4WD, Dual Motor, Single Motor, E-4orce, Quattro, xDrive, 4Motion…)
-  battery/range descriptors (63kWh, 87kWh, Standard Range, Extended Range, Long Range…)
-  variant suffixes (Engage+, Evolve+, Connect+, Sportback, Avant, Allroad, Cross Turismo…)
-  anything in parentheses, trailing punctuation, or stray characters
-
-Keep only the core model identity — what a customer would call the car at a dealership.
-Preserve original capitalisation of the base name.
-Return ONLY valid JSON, no explanation, no markdown fences.
-
-Raw model names:
-"""
-
-
-async def _normalize_batch(names: list[str]) -> dict[str, str]:
-    """Call Claude for one batch; returns {rawName: baseName}."""
-    prompt = _NORMALIZE_PROMPT + "\n".join(f'"{n}"' for n in names)
-    message = await _anthropic.messages.create(
-        model="claude-sonnet-4-5",
-        max_tokens=8096,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    text = message.content[0].text.strip().replace("```json", "").replace("```", "").strip()
-    return json.loads(text)
-
-
-async def build_base_model_map() -> dict[str, str]:
-    """
-    Chunk all unique model names into batches of _NORMALIZE_BATCH_SIZE,
-    call Claude for each batch, and merge into one map.
-    Skips entirely if base_model_map.json already exists.
-    """
-    if BASE_MODEL_MAP_PATH.exists():
-        print(f"[startup] base_model_map.json already exists — skipping normalization.")
-        return json.loads(BASE_MODEL_MAP_PATH.read_text())
-
-    df = _load_vehicles()
-    all_names = sorted(df["model"].dropna().unique().tolist())
-    print(f"[startup] Normalizing {len(all_names)} unique model names "
-          f"in batches of {_NORMALIZE_BATCH_SIZE}…")
-
-    merged: dict[str, str] = {}
-    batches = [all_names[i:i + _NORMALIZE_BATCH_SIZE]
-               for i in range(0, len(all_names), _NORMALIZE_BATCH_SIZE)]
-
-    for idx, batch in enumerate(batches, 1):
-        print(f"[startup]   batch {idx}/{len(batches)} ({len(batch)} names)…")
-        try:
-            result = await _normalize_batch(batch)
-            merged.update(result)
-        except Exception as exc:
-            # On partial failure keep going; missing keys fall back to regex in the UI
-            print(f"[startup]   WARNING: batch {idx} failed — {exc}")
-
-    BASE_MODEL_MAP_PATH.parent.mkdir(parents=True, exist_ok=True)
-    BASE_MODEL_MAP_PATH.write_text(json.dumps(merged, indent=2, ensure_ascii=False))
-    print(f"[startup] Saved {len(merged)} entries → {BASE_MODEL_MAP_PATH}")
-    return merged
-
-
-@app.on_event("startup")
-async def startup_event():
-    try:
-        await build_base_model_map()
-    except Exception as exc:
-        # Don't crash the server if normalization fails; UI has a regex fallback
-        print(f"[startup] base_model_map build failed: {exc}")
-
-
-@app.get("/api/claude/base-model-map")
-async def base_model_map():
-    """Return the pre-built {rawModelName: baseName} map built at startup."""
-    if not BASE_MODEL_MAP_PATH.exists():
-        raise HTTPException(
-            status_code=503,
-            detail="base_model_map.json not ready yet — server may still be normalizing.",
-        )
-    return json.loads(BASE_MODEL_MAP_PATH.read_text())
-
-
-# Kept for manual re-generation (e.g. after dataset updates). Not called by the frontend.
-class _ClaudeRequest(_BaseModel):
-    models: list[str]
-
-@app.post("/api/claude/normalize-models")
-async def normalize_models(body: _ClaudeRequest):
-    """Re-run normalization for an explicit list of names and overwrite the cache."""
-    result = await _normalize_batch(body.models)
-    # Merge into existing map (don't throw away cached entries)
-    existing = json.loads(BASE_MODEL_MAP_PATH.read_text()) if BASE_MODEL_MAP_PATH.exists() else {}
-    existing.update(result)
-    BASE_MODEL_MAP_PATH.parent.mkdir(parents=True, exist_ok=True)
-    BASE_MODEL_MAP_PATH.write_text(json.dumps(existing, indent=2, ensure_ascii=False))
-    return result
 
 # ── Serve React build (must be last) ─────────────────────────────────────────
 FRONTEND_BUILD = Path("frontend/dist")
