@@ -1,420 +1,288 @@
-"""
-EV Explorer — FastAPI Backend
-==============================
-Reads processed CSVs on startup, caches as JSON, serves via REST.
-All heavy computation happens in ev_analysis.py — this just serves results.
+"""Read-only API for the bundled EV and charging-station snapshot."""
 
-Endpoints
----------
-GET /api/vehicles          All consumer BEVs with cluster labels
-GET /api/vehicles/{id}     Single vehicle detail
-GET /api/stations          All charging stations (paginated)
-GET /api/stations/nearby   Stations within radius of lat/lon
-GET /api/segments          GMM cluster summaries
-GET /api/trends            Manufacturer efficiency trends
-GET /api/summary           Top-level KPIs for dashboard header
-GET /health                Liveness probe
-"""
-
-from __future__ import annotations
-
-import glob
+from functools import lru_cache
 import json
 import os
-from functools import lru_cache
-from math import asin, cos, radians, sin, sqrt
 from pathlib import Path
-from typing import Optional
+import sys
 
-import pandas as pd
 import numpy as np
-from dotenv import load_dotenv
-load_dotenv()  # loads .env from cwd or parent dirs
-
+import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-# ── App setup ─────────────────────────────────────────────────────────────────
-app = FastAPI(title="EV Explorer API", version="1.0.0")
+HERE = Path(__file__).resolve().parent
+ROOT = HERE if (HERE / "src").exists() else HERE.parent.parent
+sys.path.insert(0, str(ROOT))
+from src.vehicle_rules import base_model_name, consumer_bevs, manufacturer_trends, segment_vehicles  # noqa: E402
 
+PROCESSED_DIR = Path(os.getenv("PROCESSED_DIR", str(ROOT / "outputs/processed_data")))
+FRONTEND_BUILD = (
+    HERE / "frontend/dist" if (HERE / "frontend/dist").exists() else HERE.parent / "frontend/dist"
+)
+app = FastAPI(title="EV Explorer API", version="1.1.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],          # tighten in production
+    allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(","),
     allow_methods=["GET"],
     allow_headers=["*"],
 )
 
-# ── Data paths ────────────────────────────────────────────────────────────────
-# Path resolution works for both local dev and Docker:
-# - Docker: /app/outputs/processed_data (copied by Dockerfile)
-# - Local:  repo_root/outputs/processed_data (3 levels up from ev-app/backend/)
-_HERE      = Path(__file__).parent.resolve()
-_REPO_ROOT = _HERE.parent.parent  # ev-app/backend → ev-app → repo root
-_DOCKER_DATA = _HERE / "outputs" / "processed_data"  # Docker path
 
-PROCESSED_DIR = Path(os.getenv("PROCESSED_DIR",
-    str(_DOCKER_DATA if _DOCKER_DATA.exists()
-        else _REPO_ROOT / "outputs" / "processed_data")))
-RAW_DIR = Path(os.getenv("RAW_DIR",
-    str(_HERE / "data" / "raw" if (_HERE / "data" / "raw").exists()
-        else _REPO_ROOT / "data" / "raw")))
-
-
-def _latest(directory: Path, pattern: str) -> Path:
-    files = sorted(directory.glob(pattern))
+def _latest(pattern: str) -> Path:
+    files = sorted(PROCESSED_DIR.glob(pattern))
     if not files:
-        raise FileNotFoundError(f"No files matching {directory}/{pattern}")
+        raise HTTPException(503, detail="Dataset unavailable; check PROCESSED_DIR or rebuild the snapshot")
     return files[-1]
 
 
-# ── Data loading (cached at startup) ─────────────────────────────────────────
 @lru_cache(maxsize=1)
 def _load_vehicles() -> pd.DataFrame:
-    try:
-        path = _latest(PROCESSED_DIR, "epa_vehicles_*.csv")
-    except FileNotFoundError:
-        path = _latest(RAW_DIR, "epa_vehicles_*.csv")
-
-    df = pd.read_csv(path, low_memory=False)
-
-    # Keep only consumer BEVs (mirrors _bev_only in ev_analysis.py)
-    fuel_col = "fuelType1" if "fuelType1" in df.columns else "fuel_type"
-    if fuel_col in df.columns:
-        df = df[df[fuel_col].str.strip() == "Electricity"]
-    # Strict PHEV exclusion — must be False (not null, not True)
-    if "is_phev" in df.columns:
-        df = df[df["is_phev"].astype(str).str.strip().str.lower().isin(["false", "0", "no"])]
-    if "VClass" in df.columns:
-        commercial = ["Vans", "Vans, Cargo Type", "Vans, Passenger Type",
-                      "Special Purpose Vehicles", "Special Purpose Vehicle 2WD",
-                      "Special Purpose Vehicle 4WD"]
-        df = df[~df["VClass"].str.contains("|".join(commercial), na=False, case=False)]
-    # Strict MPGe floor — PHEVs and commercial vehicles score below 50
-    if "combined_mpge" in df.columns:
-        df = df[pd.to_numeric(df["combined_mpge"], errors="coerce") >= 50]
-
-    # Convert cluster from float (2.0) to int (2), preserving NaN
-    if "cluster" in df.columns:
-        df["cluster"] = pd.to_numeric(df["cluster"], errors="coerce")
-        mask = df["cluster"].notna()
-        df.loc[mask, "cluster"] = df.loc[mask, "cluster"].astype(int)
-
-    # Friendly column aliases used by the frontend
-    rename = {
-        "fuelType1": "fuel_type", "fuelType2": "fuel_type2",
-        "VClass": "vehicle_class", "trany": "transmission",
-    }
-    df = df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
-
-    # Synthetic vehicle ID for URL routing
-    df = df.reset_index(drop=True)
-    df["id"] = df.index
-
+    df = consumer_bevs(pd.read_csv(_latest("epa_vehicles_*.csv"), low_memory=False))
+    df, _, _ = segment_vehicles(df)
+    df = df.rename(columns={"VClass": "vehicle_class", "trany": "transmission"})
+    df["base_model"] = df["model"].map(base_model_name)
+    # Preserve EPA identifiers across filtering, sorting, and snapshot rebuilds.
+    df["id"] = pd.to_numeric(df["fueleconomy_id"], errors="raise").astype(int)
     return df
 
 
 @lru_cache(maxsize=1)
 def _load_stations() -> pd.DataFrame:
-    try:
-        path = _latest(PROCESSED_DIR, "charging_stations_*.csv")
-    except FileNotFoundError:
-        path = _latest(RAW_DIR, "charging_stations_*.csv")
-    return pd.read_csv(path, low_memory=False)
+    df = pd.read_csv(_latest("charging_stations_*.csv"), low_memory=False)
+    for field in ["latitude", "longitude", "dc_fast_count"]:
+        df[field] = pd.to_numeric(df[field], errors="coerce")
+    return df
 
 
 def _df_to_records(df: pd.DataFrame) -> list[dict]:
-    """Convert DataFrame to JSON-safe records (handles NaN, numpy types)."""
     return json.loads(df.to_json(orient="records", default_handler=str))
 
 
-# ── Haversine distance (km) ───────────────────────────────────────────────────
-def _haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    R = 6371
-    phi1, phi2 = radians(lat1), radians(lat2)
-    dphi = radians(lat2 - lat1)
-    dlam = radians(lon2 - lon1)
-    a = sin(dphi / 2) ** 2 + cos(phi1) * cos(phi2) * sin(dlam / 2) ** 2
-    return 2 * R * asin(sqrt(a))
-
-
-# ── KPI summary ──────────────────────────────────────────────────────────────
-def _build_summary(vehicles: pd.DataFrame, stations: pd.DataFrame) -> dict:
+def _page(df: pd.DataFrame, limit: int, offset: int, columns: list[str]) -> dict:
     return {
-        "total_vehicles":      len(vehicles),
-        "total_manufacturers": int(vehicles["make"].nunique()) if "make" in vehicles.columns else 0,
-        "avg_range_miles":     round(float(vehicles["range_miles"].mean()), 1) if "range_miles" in vehicles.columns else None,
-        "avg_mpge":            round(float(vehicles["combined_mpge"].mean()), 1) if "combined_mpge" in vehicles.columns else None,
-        "total_stations":      len(stations),
-        "dc_fast_stations":    int((stations["dc_fast_count"] > 0).sum()) if "dc_fast_count" in stations.columns else 0,
-        "top_network":         stations["network"].value_counts().index[0] if "network" in stations.columns else None,
+        "total": len(df),
+        "offset": offset,
+        "limit": limit,
+        "results": _df_to_records(df.iloc[offset : offset + limit][[c for c in columns if c in df]]),
     }
 
 
-# ── Segment summary ───────────────────────────────────────────────────────────
-def _load_segment_stats() -> list[dict]:
-    """Load pre-computed segment stats written by ev_analysis.py."""
-    path = PROCESSED_DIR / "segment_stats.json"
-    if path.exists():
-        return json.loads(path.read_text())
-    # Fallback: compute on the fly if file missing
-    return _build_segments_fallback(_load_vehicles())
+VEHICLE_FIELDS = [
+    "id",
+    "base_model",
+    "year",
+    "make",
+    "model",
+    "vehicle_class",
+    "transmission",
+    "drive",
+    "combined_mpge",
+    "city_mpge",
+    "highway_mpge",
+    "range_miles",
+    "battery_capacity_kwh",
+    "kwh_per_100mi",
+    "msrp_base",
+    "annual_fuel_cost_usd",
+    "connector_type",
+    "fast_charge_minutes",
+    "charge_240v_hrs",
+    "max_ac_kw",
+    "max_dc_kw",
+    "acceleration_0_60",
+    "cluster",
+]
+STATION_FIELDS = [
+    "station_id",
+    "station_name",
+    "city",
+    "state",
+    "network",
+    "access_code",
+    "latitude",
+    "longitude",
+    "level1_count",
+    "level2_count",
+    "dc_fast_count",
+    "connector_types",
+    "access_hours",
+    "distance_km",
+]
 
 
-def _build_segments_fallback(vehicles: pd.DataFrame) -> list[dict]:
-    """Fallback segment stats — less accurate, used only if segment_stats.json missing."""
-    if "cluster" not in vehicles.columns:
-        return []
-    results = []
-    for cid, grp in vehicles[vehicles["cluster"].notna()].groupby("cluster"):
-        results.append({
-            "cluster_id": int(cid),
-            "count":      len(grp),
-            "avg_mpge":   round(float(grp["combined_mpge"].mean()), 1) if "combined_mpge" in grp.columns else None,
-            "avg_range":  round(float(grp["range_miles"].mean()), 1)   if "range_miles"   in grp.columns else None,
-            "top_makes":  grp["make"].value_counts().head(3).index.tolist() if "make" in grp.columns else [],
-        })
-    return results
-
-
-# ── Routes ────────────────────────────────────────────────────────────────────
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
 
+@app.get("/ready")
+def ready():
+    return {"status": "ok", "vehicles": len(_load_vehicles()), "stations": len(_load_stations())}
+
+
 @app.get("/api/summary")
 def summary():
-    return _build_summary(_load_vehicles(), _load_stations())
+    vehicles, stations = _load_vehicles(), _load_stations()
+    meta_files = sorted(PROCESSED_DIR.glob("metadata_*.json"))
+    meta = json.loads(meta_files[-1].read_text()) if meta_files else {}
+    return {
+        "total_vehicles": len(vehicles),
+        "total_manufacturers": vehicles["make"].nunique(),
+        "avg_range_miles": round(float(vehicles["range_miles"].mean()), 1),
+        "avg_mpge": round(float(vehicles["combined_mpge"].mean()), 1),
+        "total_stations": len(stations),
+        "dc_fast_stations": int(stations["dc_fast_count"].gt(0).sum()),
+        "snapshot_date": meta.get("export_date"),
+        "latest_model_year": int(vehicles["year"].max()),
+    }
 
 
 @app.get("/api/vehicles")
 def vehicles(
-    make:       Optional[str]   = Query(None, description="Filter by manufacturer"),
-    min_range:  Optional[float] = Query(None, description="Minimum range (miles)"),
-    max_price:  Optional[float] = Query(None, description="Maximum base MSRP ($)"),
-    min_mpge:   Optional[float] = Query(None, description="Minimum combined MPGe"),
-    year:       Optional[int]   = Query(None, description="Model year"),
-    min_year:   Optional[int]   = Query(None, description="Minimum model year"),
-    cluster:    Optional[int]   = Query(None, description="GMM segment id"),
-    has_battery:  Optional[bool] = Query(None, description="Only vehicles with battery_capacity_kwh"),
-    dedup_models: bool           = Query(False, description="One row per base model (latest year)"),
-    sort_by:    str             = Query("combined_mpge", description="Sort field"),
-    sort_desc:  bool            = Query(True),
-    limit:      int             = Query(200, le=2000),
-    offset:     int             = Query(0),
+    make: str | None = None,
+    min_range: float | None = Query(None, ge=0),
+    max_price: float | None = Query(None, ge=0),
+    min_mpge: float | None = Query(None, ge=0),
+    year: int | None = None,
+    min_year: int | None = None,
+    cluster: int | None = Query(None, ge=0, le=3),
+    has_battery: bool = False,
+    dedup_models: bool = False,
+    sort_by: str = Query("combined_mpge", pattern="^(combined_mpge|range_miles|year|msrp_base)$"),
+    sort_desc: bool = True,
+    limit: int = Query(200, ge=1, le=2000),
+    offset: int = Query(0, ge=0),
 ):
-    df = _load_vehicles().copy()
-
+    df = _load_vehicles()
     if make:
-        df = df[df["make"].str.lower() == make.lower()]
-    if min_range is not None and "range_miles" in df.columns:
-        df = df[df["range_miles"] >= min_range]
-    if max_price is not None and "msrp_base" in df.columns:
-        df = df[df["msrp_base"].notna() & (df["msrp_base"] <= max_price)]
-    if min_mpge is not None and "combined_mpge" in df.columns:
-        df = df[df["combined_mpge"] >= min_mpge]
-    if year is not None and "year" in df.columns:
-        df = df[df["year"] == year]
-    if min_year is not None and "year" in df.columns:
-        df = df[df["year"] >= min_year]
-
-    # dedup_models: collapse to one row per make+base_model (latest year)
-    # This is what consumers actually want — one card per car, not per trim
-    if dedup_models and "model" in df.columns:
-        import re as _re
-        _TRIM = _re.compile(
-            r"\b(long range|standard range|standard|performance|extended range|extended|"
-            r"plus|pro|max|ultra|premium|limited|elite|gt|sport|turbo s|turbo|plaid|"
-            r"awd|rwd|fwd|4wd|dual motor|single motor|tri motor|"
-            r"cross turismo|sportback|avant|allroad|coupe|cabriolet|"
-            r"\d+in|\d+\s*inch|\(.*?\)|\d+[dwh]|kwh|kw)\b.*",
-            _re.IGNORECASE
-        )
-        def _base(m):
-            m = _TRIM.sub("", str(m)).strip()
-            return _re.sub(r"  +", " ", m).strip().lower()
-        df["_base"] = df["model"].apply(_base)
-        df["_mk"]   = df["make"].str.strip().str.lower()
-        df = df.sort_values("year", ascending=False).drop_duplicates(subset=["_mk", "_base"])
-        df = df.drop(columns=["_base", "_mk"], errors="ignore")
-    if cluster is not None and "cluster" in df.columns:
-        df = df[df["cluster"] == cluster]
-    if has_battery and "battery_capacity_kwh" in df.columns:
-        df = df[df["battery_capacity_kwh"].notna()]
-
-    if sort_by in df.columns:
-        df = df.sort_values(sort_by, ascending=not sort_desc, na_position="last")
-
-    total = len(df)
-    page  = df.iloc[offset : offset + limit]
-
-    # Only send columns the frontend needs
-    cols = [c for c in [
-        "id", "year", "make", "model", "vehicle_class", "transmission", "drive",
-        "combined_mpge", "city_mpge", "highway_mpge", "range_miles",
-        "battery_capacity_kwh", "kwh_per_100mi", "msrp_base", "annual_fuel_cost_usd",
-        "connector_type", "fast_charge_minutes", "charge_240v_hrs",
-        "max_dc_kw", "acceleration_0_60", "cluster",
-        *[c for c in df.columns if c.startswith("cluster_proba_")],
-    ] if c in page.columns]
-
-    return {
-        "total":   total,
-        "offset":  offset,
-        "limit":   limit,
-        "results": _df_to_records(page[cols]),
-    }
+        df = df.loc[df["make"].str.casefold().eq(make.casefold())]
+    for field, value in [("range_miles", min_range), ("combined_mpge", min_mpge), ("year", min_year)]:
+        if value is not None:
+            df = df.loc[df[field].ge(value)]
+    if year is not None:
+        df = df.loc[df["year"].eq(year)]
+    if max_price is not None:
+        df = df.loc[df["msrp_base"].le(max_price)]
+    if cluster is not None:
+        df = df.loc[df["cluster"].eq(cluster).fillna(False)]
+    if has_battery:
+        df = df.loc[df["battery_capacity_kwh"].notna()]
+    if dedup_models:
+        df = df.sort_values(["year", "id"], ascending=[False, True]).drop_duplicates(["make", "base_model"])
+    df = df.sort_values([sort_by, "id"], ascending=[not sort_desc, True], na_position="last")
+    return _page(df, limit, offset, VEHICLE_FIELDS)
 
 
 @app.get("/api/vehicles/makes")
 def makes():
-    df = _load_vehicles()
-    counts = df["make"].value_counts().reset_index()
-    counts.columns = ["make", "count"]
-    return _df_to_records(counts)
+    return _df_to_records(
+        _load_vehicles()["make"].value_counts().rename_axis("make").reset_index(name="count")
+    )
 
 
 @app.get("/api/vehicles/{vehicle_id}")
 def vehicle_detail(vehicle_id: int):
-    df = _load_vehicles()
-    row = df[df["id"] == vehicle_id]
+    row = _load_vehicles().loc[lambda d: d["id"].eq(vehicle_id)]
     if row.empty:
-        raise HTTPException(status_code=404, detail="Vehicle not found")
-    return _df_to_records(row)[0]
-
-
-@app.get("/api/stations/nearby")
-def stations_nearby(
-    lat:          float = Query(..., description="Latitude"),
-    lon:          float = Query(..., description="Longitude"),
-    radius_km:    float = Query(25, description="Search radius in km"),
-    dc_fast_only: bool  = Query(False),
-    limit:        int   = Query(200, le=1000),
-):
-    df = _load_stations().copy()
-    df = df.dropna(subset=["latitude", "longitude"])
-
-    if dc_fast_only and "dc_fast_count" in df.columns:
-        df = df[df["dc_fast_count"] > 0]
-
-    df["distance_km"] = df.apply(
-        lambda r: _haversine(lat, lon, r["latitude"], r["longitude"]), axis=1
-    )
-    nearby = df[df["distance_km"] <= radius_km].sort_values("distance_km").head(limit)
-
-    cols = [c for c in [
-        "station_id", "station_name", "city", "state", "network",
-        "access_code", "latitude", "longitude", "distance_km",
-        "level1_count", "level2_count", "dc_fast_count", "access_hours",
-    ] if c in nearby.columns]
-
-    return _df_to_records(nearby[cols])
+        raise HTTPException(404, detail="Vehicle not found")
+    return _df_to_records(row[[c for c in VEHICLE_FIELDS if c in row]])[0]
 
 
 @app.get("/api/stations/networks")
 def networks():
-    df = _load_stations()
-    counts = df["network"].value_counts().reset_index()
-    counts.columns = ["network", "count"]
-    total = counts["count"].sum()
-    counts["share_pct"] = (counts["count"] / total * 100).round(1)
+    counts = _load_stations()["network"].value_counts().rename_axis("network").reset_index(name="count")
+    counts["share_pct"] = (counts["count"] / counts["count"].sum() * 100).round(1)
     return _df_to_records(counts.head(15))
+
+
+@app.get("/api/stations/nearby")
+def stations_nearby(
+    lat: float = Query(..., ge=-90, le=90),
+    lon: float = Query(..., ge=-180, le=180),
+    radius_km: float = Query(25, gt=0, le=500),
+    dc_fast_only: bool = False,
+    limit: int = Query(200, ge=1, le=1000),
+):
+    df = _load_stations().dropna(subset=["latitude", "longitude"]).copy()
+    if dc_fast_only:
+        df = df.loc[df["dc_fast_count"].gt(0)].copy()
+    phi = np.radians(df["latitude"].to_numpy())
+    dphi = phi - np.radians(lat)
+    dlon = np.radians(df["longitude"].to_numpy() - lon)
+    a = np.sin(dphi / 2) ** 2 + np.cos(np.radians(lat)) * np.cos(phi) * np.sin(dlon / 2) ** 2
+    df["distance_km"] = 6371 * 2 * np.arcsin(np.sqrt(np.clip(a, 0, 1)))
+    df = df.loc[df["distance_km"].le(radius_km)].sort_values("distance_km").head(limit)
+    return _df_to_records(df[[c for c in STATION_FIELDS if c in df]])
 
 
 @app.get("/api/stations")
 def stations(
-    city:        Optional[str]  = Query(None),
-    state:       Optional[str]  = Query(None),
-    network:     Optional[str]  = Query(None),
-    dc_fast_only: bool          = Query(False),
-    limit:       int            = Query(500, le=5000),
-    offset:      int            = Query(0),
+    city: str | None = None,
+    state: str | None = None,
+    network: str | None = None,
+    dc_fast_only: bool = False,
+    limit: int = Query(500, ge=1, le=5000),
+    offset: int = Query(0, ge=0),
+    lat_min: float | None = Query(None, ge=-90, le=90),
+    lat_max: float | None = Query(None, ge=-90, le=90),
+    lon_min: float | None = Query(None, ge=-180, le=180),
+    lon_max: float | None = Query(None, ge=-180, le=180),
 ):
-    df = _load_stations().copy()
-
-    if city:
-        df = df[df["city"].str.lower() == city.lower()]
-    if state:
-        df = df[df["state"].str.upper() == state.upper()]
+    bounds = [lat_min, lat_max, lon_min, lon_max]
+    if any(b is not None for b in bounds) and not all(b is not None for b in bounds):
+        raise HTTPException(422, detail="Supply all four viewport bounds")
+    df = _load_stations()
+    if lat_min is not None:
+        if lat_min > lat_max:
+            raise HTTPException(422, detail="lat_min must be <= lat_max")
+        longitude = (
+            df["longitude"].between(lon_min, lon_max)
+            if lon_min <= lon_max
+            else (df["longitude"].ge(lon_min) | df["longitude"].le(lon_max))
+        )
+        df = df.loc[df["latitude"].between(lat_min, lat_max) & longitude]
+    for field, value in [("city", city), ("state", state)]:
+        if value:
+            df = df.loc[df[field].str.casefold().eq(value.casefold())]
     if network:
-        df = df[df["network"].str.lower().str.contains(network.lower(), na=False)]
-    if dc_fast_only and "dc_fast_count" in df.columns:
-        df = df[df["dc_fast_count"] > 0]
-
-    total = len(df)
-    page  = df.iloc[offset : offset + limit]
-
-    cols = [c for c in [
-        "station_id", "station_name", "city", "state", "network",
-        "access_code", "latitude", "longitude",
-        "level1_count", "level2_count", "dc_fast_count",
-        "connector_types", "access_hours",
-    ] if c in page.columns]
-
-    return {
-        "total":   total,
-        "offset":  offset,
-        "limit":   limit,
-        "results": _df_to_records(page[cols]),
-    }
+        df = df.loc[df["network"].str.contains(network, case=False, na=False, regex=False)]
+    if dc_fast_only:
+        df = df.loc[df["dc_fast_count"].gt(0)]
+    return _page(df, limit, offset, STATION_FIELDS)
 
 
 @app.get("/api/segments")
 def segments():
-    return _load_segment_stats()
+    return segment_vehicles(_load_vehicles())[2]
 
 
 @app.get("/api/segments/vehicles")
 def segments_vehicles():
-    """Deduplicated vehicles for segment scatter — one dot per base model."""
-    import re as _re
-    _TRIM = _re.compile(
-        r"\b(long range|standard range|standard|performance|extended range|extended|"
-        r"plus|pro|max|ultra|premium|limited|elite|gt|sport|turbo s|turbo|plaid|"
-        r"awd|rwd|fwd|4wd|4x4|dual motor|single motor|tri motor|"
-        r"cross turismo|sportback|avant|allroad|coupe|cabriolet|convertible|"
-        r"\d+in|\d+\s*inch|\(.*\)|\d+[dwh]|kwh|kw)\b.*",
-        _re.IGNORECASE
-    )
-    def base_name(m: str) -> str:
-        m = _TRIM.sub("", str(m)).strip()
-        return _re.sub(r"  +", " ", m).strip().lower()
-
-    df = _load_vehicles().copy()
-    df = df[df["cluster"].notna()]
-    # Only current-market vehicles (2022+) — older rows have stale segment assignments
-    if "year" in df.columns:
-        df = df[df["year"] >= 2022]
-    df["_base"] = df["model"].apply(base_name)
-    df["_mk"]   = df["make"].str.strip().str.lower()
-    if "year" in df.columns:
-        df = df.sort_values("year", ascending=False).drop_duplicates(subset=["_mk", "_base"])
-    df = df.drop(columns=["_base", "_mk"], errors="ignore")
-    cols = [c for c in [
-        "id", "year", "make", "model", "combined_mpge", "range_miles", "cluster",
-    ] if c in df.columns]
-    return _df_to_records(df[cols])
+    df = _load_vehicles().dropna(subset=["cluster"])
+    df = df.sort_values(["year", "id"], ascending=[False, True]).drop_duplicates(["make", "base_model"])
+    return _df_to_records(df[[c for c in VEHICLE_FIELDS if c in df]])
 
 
 @app.get("/api/trends")
 def trends():
-    """Manufacturer efficiency trend data for the chart."""
-    df = _load_vehicles()
-    if "make" not in df.columns or "year" not in df.columns:
-        return []
-
-    yearly = (
-        df.groupby(["make", "year"])["combined_mpge"]
-        .mean()
-        .reset_index()
-        .rename(columns={"combined_mpge": "avg_mpge"})
-    )
-    yearly["avg_mpge"] = yearly["avg_mpge"].round(1)
-    return _df_to_records(yearly)
+    yearly, fits = manufacturer_trends(_load_vehicles())
+    result = yearly.rename(columns={"combined_mpge": "avg_mpge"}).merge(fits, on="make")
+    result["avg_mpge"] = result["avg_mpge"].round(1)
+    return _df_to_records(result)
 
 
-# ── Serve React build (must be last) ─────────────────────────────────────────
-FRONTEND_BUILD = Path("frontend/dist")
+# SPA fallback supports directly opening /compare, while unknown API paths stay 404.
 if FRONTEND_BUILD.exists():
-    app.mount("/", StaticFiles(directory=str(FRONTEND_BUILD), html=True), name="static")
+    app.mount("/assets", StaticFiles(directory=FRONTEND_BUILD / "assets"), name="assets")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def frontend(path: str):
+        if path == "api" or path.startswith("api/"):
+            raise HTTPException(404, detail="API route not found")
+        candidate = (FRONTEND_BUILD / path).resolve()
+        if candidate.is_relative_to(FRONTEND_BUILD.resolve()) and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(FRONTEND_BUILD / "index.html")

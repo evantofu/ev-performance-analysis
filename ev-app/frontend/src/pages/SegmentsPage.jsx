@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { PlotlyChart } from '../components/PlotlyChart'
 import { api } from '../api'
 import { useApi } from '../hooks/useApi'
-import { VehicleCard } from '../components/VehicleCard'
+import { RequestError } from '../components/RequestError'
 import { MakeGrid } from '../components/MakeGrid'
 
 const COLORS = { 0: '#2E86AB', 1: '#A23B72', 2: '#06A77D', 3: '#C73E1D' }
@@ -12,31 +12,30 @@ const PROFILES = {
        desc: 'Top-tier MPGe. Lowest cost per mile to run — city cars, efficient sedans, and compacts.' },
   1: { name: 'Mainstream',      icon: '🚗',
        desc: 'Well-rounded everyday EVs. Solid efficiency and range for most drivers.' },
-  2: { name: 'Long Range',      icon: '🛣️',
-       desc: '300+ miles per charge. Ideal for road trips and eliminating range anxiety.' },
-  3: { name: 'Performance & SUV', icon: '🏎️',
-       desc: 'Trucks, large SUVs, and performance EVs. Capability and power over efficiency.' },
+  2: { name: 'Longer Range',      icon: '🛣️',
+       desc: 'Upper range quantile among models in the middle efficiency tier; not a fixed mileage guarantee.' },
+  3: { name: 'Lower Efficiency', icon: '🏎️',
+       desc: 'Lower efficiency quantile. Body style and acceleration are not used to assign this group.' },
 }
 
 export function SegmentsPage() {
-  const { data: vehicleData, loading } = useApi(() => api.vehicles({ limit: 2000 }), [])
-  const { data: scatterData }          = useApi(() => api.segmentVehicles(), [])
-  const { data: segData }              = useApi(() => api.segments(), [])
+  const { data: vehicleData, error } = useApi(signal => api.vehicles({ limit: 2000 }, { signal }), [])
+  const { data: segData, error: segmentError }              = useApi(signal => api.segments({ signal }), [])
 
   const [activeSeg, setActiveSeg] = useState(null)
 
   const vehicles       = vehicleData?.results ?? []
-  const scatterVehicles = scatterData ?? []
   const segments       = (segData ?? []).sort((a, b) => a.cluster_id - b.cluster_id)
 
   const drillVehicles = activeSeg !== null
-    ? vehicles.filter(v => Math.round(v.cluster) === activeSeg)
+    ? vehicles.filter(v => v.cluster != null && Math.round(v.cluster) === activeSeg)
     : []
 
   // Pre-compute counts from the actual loaded vehicle list so card count
   // matches drill-down count — avoids mismatch with seg.count from API
   const segCounts = {}
   for (const v of vehicles) {
+    if (v.cluster == null) continue
     const c = Math.round(v.cluster)
     if (!isNaN(c)) segCounts[c] = (segCounts[c] ?? 0) + 1
   }
@@ -65,7 +64,7 @@ export function SegmentsPage() {
   const barLayout = {
     paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
     font: { family: 'Inter, system-ui, sans-serif', color: '#7a7670', size: 11 },
-    yaxis: { title: 'Average MPGe', gridcolor: '#ebe5de', zerolinecolor: '#ebe5de',
+    yaxis: { title: { text: 'Average MPGe' }, gridcolor: '#ebe5de', zerolinecolor: '#ebe5de',
              range: [0, maxMpge * 1.18] },
     xaxis: { tickfont: { size: 12 } },
     margin: { l: 52, r: 16, t: 36, b: 48 },
@@ -89,21 +88,22 @@ export function SegmentsPage() {
 
   const rangeLayout = {
     ...barLayout,
-    yaxis: { title: 'Average Range (miles)', gridcolor: '#ebe5de', zerolinecolor: '#ebe5de',
+    yaxis: { title: { text: 'Average Range (miles)' }, gridcolor: '#ebe5de', zerolinecolor: '#ebe5de',
              range: [0, maxRange * 1.18] },
     title: { text: 'Range by segment', font: { size: 13, color: '#7a7670' } },
   }
 
   return (
     <div className="page">
+      <RequestError error={error || segmentError} />
       {/* Header */}
       <div style={{ marginBottom: 24 }}>
         <div className="display" style={{ fontSize: 32, fontWeight: 900, marginBottom: 8 }}>
-          What kind of EV buyer are you?
+          Explore efficiency and range groups
         </div>
         <p style={{ color: 'var(--text-muted)', fontSize: 13, maxWidth: 560, lineHeight: 1.7 }}>
           {vehicles.length.toLocaleString()} electric vehicles grouped into{' '}
-          <strong style={{ color: 'var(--terra)' }}>4 buyer profiles</strong>.
+          <strong style={{ color: 'var(--terra)' }}>4 descriptive groups</strong>.
           Click a profile to explore its vehicles.
         </p>
       </div>
@@ -189,8 +189,7 @@ export function SegmentsPage() {
       )}
 
       <p style={{ marginTop: 8, fontSize: 10, color: 'var(--text-muted)' }}>
-        Segments computed using quantile cuts on deduplicated base model averages.
-        Vehicles are grouped by their primary use case — efficiency, balance, range, or performance.
+        2022+ cohort. Thresholds use latest-model-year base-model averages; older eligible records inherit their model’s label. These are descriptive rules, not learned clusters or recommendations.
       </p>
     </div>
   )

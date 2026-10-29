@@ -1,54 +1,14 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useStore } from '../store'
-
-// ─── Regex fallback (used while AI map loads or if the API call fails) ────────
-const _TRIM = /\b(long range|standard range|standard|performance|extended range|extended|plus|pro|max|ultra|premium|limited|elite|gt|sport|turbo s|turbo|plaid|awd|rwd|fwd|4wd|dual motor|single motor|tri motor|cross turismo|sportback|avant|allroad|coupe|cabriolet|\d+in|\d+\s*inch|\(.*?\)|\d+[\s-]*kw[\s-]*hr|\d+[dwh]|kwh|kw|sv\/sl|sv|sl|se|sr|xle|xse|s\b)\b.*/gi
-const _SPEC_SUFFIX = /[\s/]*(\d+\s*kwh|e-4orce|quattro|xdrive|4motion|[a-z][a-z0-9]*\+(?:\/[a-z][a-z0-9]*\+)*|\(.*)/gi
-
-function regexBaseModel(model) {
-  return model
-    .replace(_TRIM, '')
-    .replace(_SPEC_SUFFIX, '')
-    .trim()
-    .replace(/\s+/g, ' ')
-    .toLowerCase()
-}
-
-// ─── AI normalization ─────────────────────────────────────────────────────────
-// Fetches the pre-built { rawName → baseName } map from the server.
-// Built once at server startup from all unique names in batches of 100.
-// Cached in module scope — one fetch per app session regardless of re-renders.
-let _cachedMap = null
-let _fetchPromise = null
-
-function fetchBaseModelMap() {
-  // Return the in-flight promise if we're already fetching
-  if (_fetchPromise) return _fetchPromise
-  if (_cachedMap)    return Promise.resolve(_cachedMap)
-
-  _fetchPromise = fetch('/api/claude/base-model-map')
-    .then(res => {
-      if (!res.ok) throw new Error(`base-model-map: ${res.status}`)
-      return res.json()
-    })
-    .then(map => {
-      _cachedMap    = map
-      _fetchPromise = null
-      return map
-    })
-    .catch(err => {
-      _fetchPromise = null   // allow retry on next mount
-      throw err
-    })
-
-  return _fetchPromise
-}
+import { OperatingCost } from './OperatingCost'
 
 // ─── VehicleRow ───────────────────────────────────────────────────────────────
 function VehicleRow({ vehicle, isSelected, onToggle, compact = false }) {
   return (
     <div
       onClick={onToggle}
+      role="button" tabIndex={0}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle() } }}
       style={{
         display: 'flex', alignItems: 'center', gap: 10,
         padding: compact ? '6px 10px' : '10px 12px',
@@ -80,6 +40,7 @@ function VehicleRow({ vehicle, isSelected, onToggle, compact = false }) {
               {Math.round(vehicle.battery_capacity_kwh)} kWh
             </span>
           )}
+          <OperatingCost mpge={vehicle.combined_mpge} />
           {vehicle.connector_type && (
             <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>{vehicle.connector_type}</span>
           )}
@@ -116,6 +77,8 @@ function ModelGroup({ year, base, vehicles, sortBy = 'combined_mpge' }) {
         <div style={{ flex: 1 }}>
           <div
             onClick={() => toggleSelect(best)}
+            role="button" tabIndex={0}
+            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSelect(best) } }}
             style={{
               display: 'flex', alignItems: 'center', gap: 10,
               padding: '14px 16px', borderRadius: 8,
@@ -146,6 +109,7 @@ function ModelGroup({ year, base, vehicles, sortBy = 'combined_mpge' }) {
                     {Math.round(best.battery_capacity_kwh)} kWh
                   </span>
                 )}
+                <OperatingCost mpge={best.combined_mpge} />
                 {hasMultiple && (
                   <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>
                     {vehicles.length} trims available
@@ -204,36 +168,10 @@ function ModelGroup({ year, base, vehicles, sortBy = 'combined_mpge' }) {
 
 // ─── MakeGrid ─────────────────────────────────────────────────────────────────
 export function MakeGrid({ vehicles, defaultExpanded = 0, sortBy = 'combined_mpge' }) {
-  // baseModelMap: { rawModelName → cleanBaseName }
-  // Starts null (loading), falls back to regex if API fails.
-  const [baseModelMap, setBaseModelMap] = useState(null)
-  const [normalizing, setNormalizing] = useState(true)
-
-  useEffect(() => {
-    // Fetch the server-built map once on mount.
-    // The module-level cache means repeated mounts don't re-fetch.
-    fetchBaseModelMap()
-      .then(map => {
-        setBaseModelMap(map)
-        setNormalizing(false)
-      })
-      .catch(() => {
-        // API not ready yet — regex fallback will be used automatically
-        setBaseModelMap(null)
-        setNormalizing(false)
-      })
-  }, [])  // empty deps: run once per mount
-
-  // Resolve base model name: AI map first, regex fallback
-  function getBase(model) {
-    if (baseModelMap && baseModelMap[model]) return baseModelMap[model]
-    return regexBaseModel(model)
-  }
-
   // Group: byMake → { "year||base" → [vehicles] }
   const byMake = {}
   for (const v of vehicles) {
-    const base = getBase(v.model)
+    const base = v.base_model || v.model
     const key  = `${v.year}||${base}`
     if (!byMake[v.make])       byMake[v.make] = {}
     if (!byMake[v.make][key])  byMake[v.make][key] = []
@@ -276,10 +214,7 @@ export function MakeGrid({ vehicles, defaultExpanded = 0, sortBy = 'combined_mpg
         alignItems: 'center', flexWrap: 'wrap',
       }}>
         <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-          {normalizing
-            ? 'Normalizing model names…'
-            : `${totalModelYears} models · ${vehicles.length} trims · ${makes.length} manufacturers`
-          }
+          {`${totalModelYears} model-year groups · ${vehicles.length} records · ${makes.length} manufacturers`}
         </span>
         <button className="btn" style={{ padding: '4px 10px', fontSize: 10 }}
           onClick={() => setExpanded(new Set(makes.map(([m]) => m)))}>

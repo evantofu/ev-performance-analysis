@@ -1,46 +1,50 @@
 [
   {
     "cluster_id": 0,
-    "count": 374,
-    "avg_mpge": 109.0,
-    "avg_range": 291.0,
+    "count": 360,
+    "base_model_count": 38,
+    "avg_mpge": 112.5,
+    "avg_range": 284.4,
     "top_makes": [
-      "Rivian",
-      "Porsche",
+      "Tesla",
+      "Lucid",
       "BMW"
     ]
   },
   {
     "cluster_id": 1,
-    "count": 242,
-    "avg_mpge": 88.7,
-    "avg_range": 259.9,
+    "count": 227,
+    "base_model_count": 26,
+    "avg_mpge": 93.2,
+    "avg_range": 261.5,
     "top_makes": [
+      "Ford",
       "BMW",
-      "Rivian",
-      "Porsche"
+      "Nissan"
     ]
   },
   {
     "cluster_id": 2,
-    "count": 98,
-    "avg_mpge": 88.2,
-    "avg_range": 327.2,
+    "count": 113,
+    "base_model_count": 12,
+    "avg_mpge": 94.0,
+    "avg_range": 328.9,
     "top_makes": [
-      "Rivian",
-      "Volvo",
-      "Audi"
+      "Mercedes-Benz",
+      "BMW",
+      "Lucid"
     ]
   },
   {
     "cluster_id": 3,
-    "count": 305,
-    "avg_mpge": 69.6,
-    "avg_range": 303.0,
+    "count": 450,
+    "base_model_count": 38,
+    "avg_mpge": 76.1,
+    "avg_range": 274.5,
     "top_makes": [
-      "BMW",
       "Rivian",
-      "Tesla"
+      "Porsche",
+      "BMW"
     ]
   }
 ]

@@ -1,7 +1,8 @@
 import { useEffect, useRef } from 'react'
-import Plotly from 'plotly.js-dist-min'
+import Plotly from 'plotly.js-basic-dist-min'
+const DEFAULT_CONFIG = {}
 
-export function PlotlyChart({ data, layout, config = {}, style = {} }) {
+export function PlotlyChart({ data, layout, config = DEFAULT_CONFIG, style = {} }) {
   const ref = useRef(null)
 
   useEffect(() => {
@@ -14,10 +15,12 @@ export function PlotlyChart({ data, layout, config = {}, style = {} }) {
       ...config,
     })
 
-    return () => {
-      if (ref.current) Plotly.purge(ref.current)   // only purge if still mounted
-    }
-  }, [data, layout])
+  }, [data, layout, config])
+
+  useEffect(() => {
+    const element = ref.current
+    return () => { if (element) Plotly.purge(element) }
+  }, [])
 
   return <div ref={ref} style={{ width: '100%', ...style }} />
 }

@@ -16,7 +16,7 @@ const METRICS = [
 function fmt(value, unit) {
   if (value == null) return null        // null signals "hide this cell"
   if (unit === '$')  return `$${Math.round(value).toLocaleString()}`
-  return `${value} ${unit}`
+  return `${Number.isInteger(value) ? value : Number(value).toFixed(1)} ${unit}`
 }
 
 export function ComparePanel() {
@@ -114,10 +114,9 @@ export function ComparePanel() {
       {/* Data coverage note */}
       {(a?.battery_capacity_kwh == null || (b && b?.battery_capacity_kwh == null)) && (
         <p style={{ marginTop: 12, fontSize: 10, color: 'var(--text-muted)' }}>
-          Some specs unavailable — battery & charging data covers ~230 vehicles
-          (Tesla, Hyundai, BMW, Audi, VW, Rivian have best coverage).
-          Use the <strong>Full specs</strong> filter to compare only enriched vehicles.
-        </p>
+          Some specifications are unavailable. The <strong>Battery data available</strong> filter
+        includes records with a battery value; other specifications may still be missing.
+      </p>
       )}
     </div>
   )

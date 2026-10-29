@@ -5,7 +5,6 @@ export const useStore = create((set, get) => ({
   filters: {
     make:         null,
     min_range:    null,
-    max_price:    null,
     min_mpge:     null,
     year:         null,
     current_only: null,
@@ -14,10 +13,9 @@ export const useStore = create((set, get) => ({
     sort_desc:    true,
   },
   setFilter: (key, value) =>
-    set(s => ({ filters: { ...s.filters, [key]: value || null } })),
+    set(s => ({ filters: { ...s.filters, [key]: value ?? null } })),
   resetFilters: () =>
-    set({ filters: { make: null, min_range: null, max_price: null,
-                     min_mpge: null, year: null, current_only: null,
+    set({ filters: { make: null, min_range: null, min_mpge: null, year: null, current_only: null,
                      full_specs: null,
                      sort_by: 'combined_mpge', sort_desc: true } }),
 
@@ -46,7 +44,4 @@ export const useStore = create((set, get) => ({
   setStationFilter: (key, value) =>
     set(s => ({ stationFilters: { ...s.stationFilters, [key]: value } })),
 
-  // ── UI state ─────────────────────────────────────────────────────────────
-  segmentView: '2d',   // '2d' | '3d'
-  setSegmentView: (v) => set({ segmentView: v }),
 }))
