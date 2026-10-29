@@ -8,10 +8,21 @@
     "stations": {
       "rows": 80203,
       "columns": 20
-    },
-    "sales": {
-      "rows": 96,
-      "columns": 5
     }
+  },
+  "provenance": {
+    "vehicles": "EPA bulk export; optional OpenEV enrichment (may use cross-year or fuzzy matches)",
+    "stations": "AFDC public charging-station snapshot; not live availability",
+    "sales": "not_shipped; former unused sales snapshot was synthetic",
+    "normalization": "bundled model-name lookup plus deterministic regex fallback"
+  },
+  "segmentation": {
+    "method": "rule-based quantiles on latest-year base-model averages",
+    "cohort_min_year": 2022,
+    "efficiency_quantiles": [
+      0.33,
+      0.67
+    ],
+    "range_quantile": 0.67
   }
 }

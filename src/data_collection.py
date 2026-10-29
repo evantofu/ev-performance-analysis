@@ -2,7 +2,7 @@
 EV Data Collection
 ==================
 Pulls from three free sources and writes CSVs to data/raw/ in the exact
-column shapes expected by ev_analysis.py and app.py.
+column shapes expected by ev_analysis.py and the API.
 
 Sources
 -------
@@ -28,12 +28,9 @@ Get your free NREL key (instant, no approval):
 from __future__ import annotations
 
 import argparse
-import json
 import logging
-import sys
 import time
 from datetime import datetime
-from io import StringIO
 from pathlib import Path
 
 import os
@@ -50,7 +47,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-RAW_DIR = Path("data/raw")
+RAW_DIR = Path(__file__).resolve().parents[1] / "data/raw"
 RAW_DIR.mkdir(parents=True, exist_ok=True)
 
 STAMP = datetime.now().strftime("%Y%m%d")
@@ -69,7 +66,7 @@ def _get(url: str, params: dict | None = None, retries: int = 3) -> requests.Res
         except requests.RequestException as e:
             if attempt == retries - 1:
                 raise
-            wait = 2 ** attempt
+            wait = 2**attempt
             log.warning("  Retry %d/%d after %ds (%s)", attempt + 1, retries, wait, e)
             time.sleep(wait)
 
@@ -100,12 +97,14 @@ def collect_vehicles_fe(start_year: int = 2019) -> pd.DataFrame:
     return EV/PHEV rows from start_year onward.
 
     Column mapping keeps the same output shape used by ev_analysis.py
-    and app.py so nothing downstream needs to change.
+    and the API so nothing downstream needs to change.
     """
     log.info("── fueleconomy.gov: downloading bulk CSV (one request, ~4 MB)")
     r = _get(FE_CSV_URL)
 
-    import io, zipfile
+    import io
+    import zipfile
+
     with zipfile.ZipFile(io.BytesIO(r.content)) as z:
         csv_name = [n for n in z.namelist() if n.endswith(".csv")][0]
         with z.open(csv_name) as f:
@@ -124,50 +123,58 @@ def collect_vehicles_fe(start_year: int = 2019) -> pd.DataFrame:
 
     # Rename to the column names the rest of the pipeline expects
     col_map = {
-        "id":            "fueleconomy_id",
-        "year":          "year",
-        "make":          "make",
-        "model":         "model",
-        "trany":         "trany",
-        "drive":         "drive",
-        "VClass":        "VClass",
-        "comb08U":       "combined_mpge",   # MPGe unrounded (falls back below)
-        "comb08":        "_comb08",
-        "city08U":       "city_mpge",
-        "city08":        "_city08",
-        "highway08U":    "highway_mpge",
-        "highway08":     "_highway08",
-        "combE":         "kwh_per_100mi",
-        "range":         "range_miles",
-        "cityE":         "range_city",
-        "highwayE":      "range_highway",
+        "id": "fueleconomy_id",
+        "year": "year",
+        "make": "make",
+        "model": "model",
+        "trany": "trany",
+        "drive": "drive",
+        "VClass": "VClass",
+        "comb08U": "combined_mpge",  # MPGe unrounded (falls back below)
+        "comb08": "_comb08",
+        "city08U": "city_mpge",
+        "city08": "_city08",
+        "highway08U": "highway_mpge",
+        "highway08": "_highway08",
+        "combE": "kwh_per_100mi",
+        "range": "range_miles",
+        "cityE": "range_city",
+        "highwayE": "range_highway",
         "co2TailpipeAGpm": "co2_tailpipe_gpm",
-        "ghgScore":      "ghg_score",
+        "ghgScore": "ghg_score",
         "smartwayScore": "smog_score",
-        "fuelCost08":    "annual_fuel_cost_usd",
-        "fuelType1":     "fuel_type",
-        "fuelType2":     "fuel_type2",
-        "phevBlended":   "is_phev",
-        "evMotor":       "ev_motor",
+        "fuelCost08": "annual_fuel_cost_usd",
+        "fuelType1": "fuel_type",
+        "fuelType2": "fuel_type2",
+        "phevBlended": "is_phev",
+        "evMotor": "ev_motor",
     }
     present = {k: v for k, v in col_map.items() if k in df.columns}
     df = df.rename(columns=present)
 
     # Prefer unrounded MPGe cols; fall back to rounded when unrounded is zero/NaN
     for unr, fallback, out in [
-        ("combined_mpge", "_comb08",    "combined_mpge"),
-        ("city_mpge",     "_city08",    "city_mpge"),
-        ("highway_mpge",  "_highway08", "highway_mpge"),
+        ("combined_mpge", "_comb08", "combined_mpge"),
+        ("city_mpge", "_city08", "city_mpge"),
+        ("highway_mpge", "_highway08", "highway_mpge"),
     ]:
         if unr in df.columns and fallback in df.columns:
             df[out] = df[unr].where(df[unr].notna() & (df[unr] != 0), df[fallback])
-            df.drop(columns=[c for c in [fallback] if c != out and c in df.columns],
-                    inplace=True, errors="ignore")
+            df.drop(
+                columns=[c for c in [fallback] if c != out and c in df.columns], inplace=True, errors="ignore"
+            )
 
     # Columns enriched later from OpenEV — initialise as NaN
-    for col in ["battery_capacity_kwh", "msrp_base", "charge_240v_hrs",
-                "fast_charge_minutes", "max_ac_kw", "max_dc_kw",
-                "connector_type", "acceleration_0_60"]:
+    for col in [
+        "battery_capacity_kwh",
+        "msrp_base",
+        "charge_240v_hrs",
+        "fast_charge_minutes",
+        "max_ac_kw",
+        "max_dc_kw",
+        "connector_type",
+        "acceleration_0_60",
+    ]:
         if col not in df.columns:
             df[col] = None
 
@@ -182,9 +189,7 @@ def collect_vehicles_fe(start_year: int = 2019) -> pd.DataFrame:
 # Community-maintained EV specs with charging details not in EPA data.
 # Docs: https://open-ev-data.github.io/
 # ══════════════════════════════════════════════════════════════════════════════
-OPENEV_RELEASE_API = (
-    "https://api.github.com/repos/open-ev-data/open-ev-data-dataset/releases/latest"
-)
+OPENEV_RELEASE_API = "https://api.github.com/repos/open-ev-data/open-ev-data-dataset/releases/latest"
 
 
 def _find_openev_json_url() -> str:
@@ -199,8 +204,7 @@ def _find_openev_json_url() -> str:
             log.info("  Found asset: %s", name)
             return url
     raise RuntimeError(
-        "Could not find JSON asset in latest OpenEV release. "
-        f"Assets found: {[a['name'] for a in assets]}"
+        f"Could not find JSON asset in latest OpenEV release. Assets found: {[a['name'] for a in assets]}"
     )
 
 
@@ -241,17 +245,20 @@ def _extract_openev_row(v: dict) -> dict:
     KM_TO_MI = 0.621371
 
     # ── Make / model ──────────────────────────────────────────────────────────
-    make  = _obj_name(v.get("make"))
+    make = _obj_name(v.get("make"))
     model = _obj_name(v.get("model"))
-    year  = v.get("year")
+    year = v.get("year")
 
     # ── Battery ───────────────────────────────────────────────────────────────
     bat = v.get("battery") or {}
-    batt_kwh = _float(_first(
-        bat.get("pack_capacity_kwh_net"),
-        bat.get("pack_capacity_kwh_gross"),
-        bat.get("usable_kwh"), bat.get("capacity_kwh"),
-    ))
+    batt_kwh = _float(
+        _first(
+            bat.get("pack_capacity_kwh_net"),
+            bat.get("pack_capacity_kwh_gross"),
+            bat.get("usable_kwh"),
+            bat.get("capacity_kwh"),
+        )
+    )
 
     # ── Range — rated list, prefer EPA cycle then WLTP ───────────────────────
     range_mi = None
@@ -261,7 +268,8 @@ def _extract_openev_row(v: dict) -> dict:
         for entry in rated:
             if isinstance(entry, dict) and entry.get("cycle") == "epa":
                 range_mi = _float(entry.get("range_km", 0)) * KM_TO_MI if entry.get("range_km") else None
-                if range_mi: break
+                if range_mi:
+                    break
         # Fall back to WLTP
         if range_mi is None:
             for entry in rated:
@@ -272,9 +280,9 @@ def _extract_openev_row(v: dict) -> dict:
         range_mi = round(range_mi, 0)
 
     # ── Charging ──────────────────────────────────────────────────────────────
-    chg    = v.get("charging") or {}
-    ac     = chg.get("ac") or {}
-    dc     = chg.get("dc") or {}
+    chg = v.get("charging") or {}
+    ac = chg.get("ac") or {}
+    dc = chg.get("dc") or {}
     max_ac = _float(_first(ac.get("max_power_kw"), ac.get("max_kw")))
     max_dc = _float(_first(dc.get("max_power_kw"), dc.get("max_kw")))
 
@@ -292,44 +300,56 @@ def _extract_openev_row(v: dict) -> dict:
     if isinstance(ports, list) and ports:
         port = ports[0]
         if isinstance(port, dict):
-            raw_conn = _first(port.get("connector"), port.get("standard"),
-                              port.get("type"), port.get("connector_type"))
+            raw_conn = _first(
+                port.get("connector"), port.get("standard"), port.get("type"), port.get("connector_type")
+            )
             if raw_conn:
                 # Normalise to friendly names
                 conn_map = {
-                    "ccs1": "CCS", "ccs2": "CCS2", "nacs": "NACS",
-                    "type2": "Type 2", "chademo": "CHAdeMO",
-                    "j1772": "J1772", "gbt": "GB/T",
+                    "ccs1": "CCS",
+                    "ccs2": "CCS2",
+                    "nacs": "NACS",
+                    "type2": "Type 2",
+                    "chademo": "CHAdeMO",
+                    "j1772": "J1772",
+                    "gbt": "GB/T",
                 }
                 connector = conn_map.get(str(raw_conn).lower(), str(raw_conn).upper())
 
     # ── Performance ───────────────────────────────────────────────────────────
-    perf  = v.get("performance") or {}
-    accel = _float(_first(
-        perf.get("acceleration_0_60_mph_s"),
-        perf.get("zero_to_60_mph_s"),
-        perf.get("accel_0_60"),
-    ))
+    perf = v.get("performance") or {}
+    accel = _float(
+        _first(
+            perf.get("acceleration_0_60_mph_s"),
+            perf.get("zero_to_60_mph_s"),
+            perf.get("accel_0_60"),
+        )
+    )
 
     # ── Price — not in OpenEV v1.24, leave as None ───────────────────────────
-    msrp = _float(_first(
-        v.get("msrp_usd"), v.get("base_price_usd"),
-        v.get("price_usd"), v.get("msrp"), v.get("price"),
-    ))
+    msrp = _float(
+        _first(
+            v.get("msrp_usd"),
+            v.get("base_price_usd"),
+            v.get("price_usd"),
+            v.get("msrp"),
+            v.get("price"),
+        )
+    )
 
     return {
-        "make":                 make,
-        "model":                model,
-        "year":                 year,
+        "make": make,
+        "model": model,
+        "year": year,
         "battery_capacity_kwh": batt_kwh,
-        "range_miles":          range_mi,
-        "charge_240v_hrs":      charge_hrs,
-        "fast_charge_minutes":  dc_min,
-        "max_ac_kw":            max_ac,
-        "max_dc_kw":            max_dc,
-        "connector_type":       connector,
-        "acceleration_0_60":    accel,
-        "msrp_base":            msrp,
+        "range_miles": range_mi,
+        "charge_240v_hrs": charge_hrs,
+        "fast_charge_minutes": dc_min,
+        "max_ac_kw": max_ac,
+        "max_dc_kw": max_dc,
+        "connector_type": connector,
+        "acceleration_0_60": accel,
+        "msrp_base": msrp,
     }
 
 
@@ -360,13 +380,20 @@ def collect_openev() -> pd.DataFrame:
     # Log first record keys to help diagnose future schema changes
     log.info("  OpenEV first record keys: %s", list(raw[0].keys())[:15])
 
-
     rows = [_extract_openev_row(v) for v in raw]
     df = pd.DataFrame(rows)
 
     # Report how many fields were actually populated
-    for col in ["make", "model", "year", "battery_capacity_kwh", "msrp_base",
-                "fast_charge_minutes", "max_dc_kw", "acceleration_0_60"]:
+    for col in [
+        "make",
+        "model",
+        "year",
+        "battery_capacity_kwh",
+        "msrp_base",
+        "fast_charge_minutes",
+        "max_dc_kw",
+        "acceleration_0_60",
+    ]:
         if col in df.columns:
             filled = df[col].notna().sum()
             log.info("  OpenEV %-25s %d/%d filled", col, filled, len(df))
@@ -397,6 +424,7 @@ def _normalise_make(s: str) -> str:
 def _normalise_model(s: str) -> str:
     """Aggressively normalise model name for fuzzy join."""
     import re
+
     s = str(s).strip().lower()
     # Remove common suffixes that differ between datasets
     s = re.sub(r"\b(ev|electric|bev|phev|plug.in|hybrid|quattro|awd|rwd|fwd|4wd|4x4)\b", "", s)
@@ -417,11 +445,20 @@ def _merge_openev(vehicles: pd.DataFrame, openev: pd.DataFrame) -> pd.DataFrame:
     """
     log.info("── Merging OpenEV enrichment into EPA data")
 
-    enrich_cols = [c for c in [
-        "battery_capacity_kwh", "charge_240v_hrs", "fast_charge_minutes",
-        "max_ac_kw", "max_dc_kw", "connector_type",
-        "acceleration_0_60", "msrp_base",
-    ] if c in openev.columns]
+    enrich_cols = [
+        c
+        for c in [
+            "battery_capacity_kwh",
+            "charge_240v_hrs",
+            "fast_charge_minutes",
+            "max_ac_kw",
+            "max_dc_kw",
+            "connector_type",
+            "acceleration_0_60",
+            "msrp_base",
+        ]
+        if c in openev.columns
+    ]
 
     if not enrich_cols:
         log.warning("  OpenEV: no enrich columns found — skipping merge")
@@ -429,22 +466,26 @@ def _merge_openev(vehicles: pd.DataFrame, openev: pd.DataFrame) -> pd.DataFrame:
 
     # ── Normalise keys ────────────────────────────────────────────────────────
     veh = vehicles.copy()
-    oe  = openev.copy()
+    oe = openev.copy()
 
     for df in [veh, oe]:
-        df["_make"]  = df["make"].apply(_normalise_make)
+        df["_make"] = df["make"].apply(_normalise_make)
         df["_model"] = df["model"].astype(str).str.strip().str.lower()
         df["_model_fuzzy"] = df["_model"].apply(_normalise_model)
 
     veh["year"] = pd.to_numeric(veh["year"], errors="coerce")
-    oe["year"]  = pd.to_numeric(oe["year"],  errors="coerce")
+    oe["year"] = pd.to_numeric(oe["year"], errors="coerce")
 
     oe_slim = oe[["_make", "_model", "_model_fuzzy", "year"] + enrich_cols].copy()
 
     # ── Pass 1: exact (make, model, year) ────────────────────────────────────
     oe1 = oe_slim.drop_duplicates(["_make", "_model", "year"])
-    merged = veh.merge(oe1[["_make", "_model", "year"] + enrich_cols],
-                       on=["_make", "_model", "year"], how="left", suffixes=("", "_oe1"))
+    merged = veh.merge(
+        oe1[["_make", "_model", "year"] + enrich_cols],
+        on=["_make", "_model", "year"],
+        how="left",
+        suffixes=("", "_oe1"),
+    )
     _fill(merged, enrich_cols, "_oe1")
     n1 = merged[enrich_cols[0]].notna().sum()
     log.info("  Pass 1 (exact make+model+year): %d rows enriched", n1)
@@ -501,17 +542,17 @@ NREL_BASE = "https://developer.nlr.gov/api/alt-fuel-stations/v1"
 def collect_stations(api_key: str, country: str = "US") -> pd.DataFrame:
     """
     Pull all open public EV charging stations from NREL AFDC.
-    Returns one row per station in the shape expected by app.py.
+    Returns one row per station in the shape expected by the API.
     """
     log.info("── NREL AFDC: collecting EV stations (%s)", country)
 
     params = {
-        "api_key":    api_key,
-        "fuel_type":  "ELEC",
-        "status":     "E",           # E = currently open
-        "access":     "public",
-        "country":    country,
-        "limit":      "all",
+        "api_key": api_key,
+        "fuel_type": "ELEC",
+        "status": "E",  # E = currently open
+        "access": "public",
+        "country": country,
+        "limit": "all",
     }
 
     r = _get(f"{NREL_BASE}.json", params=params)
@@ -521,35 +562,37 @@ def collect_stations(api_key: str, country: str = "US") -> pd.DataFrame:
 
     rows = []
     for s in raw:
-        rows.append({
-            # ── identity ─────────────────────────────────────────────────────
-            "station_id":       s.get("id"),
-            "station_name":     s.get("station_name"),
-            "street":           s.get("street_address"),
-            "city":             s.get("city"),
-            "state":            s.get("state"),
-            "zip":              s.get("zip"),
-            "country":          s.get("country"),
-            # ── location ─────────────────────────────────────────────────────
-            "latitude":         _float(s.get("latitude")),
-            "longitude":        _float(s.get("longitude")),
-            # ── network ──────────────────────────────────────────────────────
-            "network":          s.get("ev_network") or "Non-Networked",
-            "network_url":      s.get("ev_network_web"),
-            # ── access ───────────────────────────────────────────────────────
-            "access_code":      s.get("access_code"),           # public / private
-            "access_hours":     s.get("access_days_time"),
-            "facility_type":    s.get("facility_type"),
-            # ── charger counts ───────────────────────────────────────────────
-            "level1_count":     int(s.get("ev_level1_evse_num") or 0),
-            "level2_count":     int(s.get("ev_level2_evse_num") or 0),
-            "dc_fast_count":    int(s.get("ev_dc_fast_num") or 0),
-            # ── connector detail ─────────────────────────────────────────────
-            "connector_types":  s.get("ev_connector_types"),    # list or None
-            # ── metadata ─────────────────────────────────────────────────────
-            "open_date":        s.get("open_date"),
-            "updated_at":       s.get("updated_at"),
-        })
+        rows.append(
+            {
+                # ── identity ─────────────────────────────────────────────────────
+                "station_id": s.get("id"),
+                "station_name": s.get("station_name"),
+                "street": s.get("street_address"),
+                "city": s.get("city"),
+                "state": s.get("state"),
+                "zip": s.get("zip"),
+                "country": s.get("country"),
+                # ── location ─────────────────────────────────────────────────────
+                "latitude": _float(s.get("latitude")),
+                "longitude": _float(s.get("longitude")),
+                # ── network ──────────────────────────────────────────────────────
+                "network": s.get("ev_network") or "Non-Networked",
+                "network_url": s.get("ev_network_web"),
+                # ── access ───────────────────────────────────────────────────────
+                "access_code": s.get("access_code"),  # public / private
+                "access_hours": s.get("access_days_time"),
+                "facility_type": s.get("facility_type"),
+                # ── charger counts ───────────────────────────────────────────────
+                "level1_count": int(s.get("ev_level1_evse_num") or 0),
+                "level2_count": int(s.get("ev_level2_evse_num") or 0),
+                "dc_fast_count": int(s.get("ev_dc_fast_num") or 0),
+                # ── connector detail ─────────────────────────────────────────────
+                "connector_types": s.get("ev_connector_types"),  # list or None
+                # ── metadata ─────────────────────────────────────────────────────
+                "open_date": s.get("open_date"),
+                "updated_at": s.get("updated_at"),
+            }
+        )
 
     df = pd.DataFrame(rows).dropna(subset=["latitude", "longitude"])
     log.info("  Stations with coordinates: %d", len(df))
@@ -563,63 +606,74 @@ def collect_stations(api_key: str, country: str = "US") -> pd.DataFrame:
 # ══════════════════════════════════════════════════════════════════════════════
 def _synthetic_vehicles() -> pd.DataFrame:
     import numpy as np
+
     rng = np.random.default_rng(42)
     makers = {
-        "Tesla":    [("Model 3", 82, 358, 40240, 138, "NACS"),
-                     ("Model Y", 82, 330, 43990, 123, "NACS"),
-                     ("Model S", 100, 405, 74990, 120, "NACS")],
-        "Hyundai":  [("IONIQ 6", 77, 361, 38615, 140, "CCS"),
-                     ("IONIQ 5", 77, 303, 41450, 114, "CCS")],
-        "Chevrolet":[("Bolt EV", 65, 259, 26500, 120, "CCS"),
-                     ("Equinox EV", 85, 319, 34995, 121, "CCS")],
-        "BMW":      [("i4 eDrive40", 84, 301, 52200, 107, "CCS")],
-        "Ford":     [("Mustang Mach-E", 91, 312, 42995, 100, "CCS"),
-                     ("F-150 Lightning", 131, 320, 49995, 78, "CCS")],
-        "Rivian":   [("R1T", 135, 314, 67500, 73, "NACS"),
-                     ("R1S", 135, 321, 75900, 71, "NACS")],
+        "Tesla": [
+            ("Model 3", 82, 358, 40240, 138, "NACS"),
+            ("Model Y", 82, 330, 43990, 123, "NACS"),
+            ("Model S", 100, 405, 74990, 120, "NACS"),
+        ],
+        "Hyundai": [("IONIQ 6", 77, 361, 38615, 140, "CCS"), ("IONIQ 5", 77, 303, 41450, 114, "CCS")],
+        "Chevrolet": [("Bolt EV", 65, 259, 26500, 120, "CCS"), ("Equinox EV", 85, 319, 34995, 121, "CCS")],
+        "BMW": [("i4 eDrive40", 84, 301, 52200, 107, "CCS")],
+        "Ford": [
+            ("Mustang Mach-E", 91, 312, 42995, 100, "CCS"),
+            ("F-150 Lightning", 131, 320, 49995, 78, "CCS"),
+        ],
+        "Rivian": [("R1T", 135, 314, 67500, 73, "NACS"), ("R1S", 135, 321, 75900, 71, "NACS")],
     }
     rows = []
     for year in range(2019, 2026):
         for make, models in makers.items():
             for model, batt, rng_mi, price, mpge, conn in models:
                 noise = rng.normal(0, 0.03)
-                rows.append({
-                    "fueleconomy_id":       None,
-                    "year":                 year,
-                    "make":                 make,
-                    "model":                model,
-                    "combined_mpge":        round(mpge * (1 + noise), 1),
-                    "city_mpge":            round(mpge * 1.03 * (1 + noise), 1),
-                    "highway_mpge":         round(mpge * 0.97 * (1 + noise), 1),
-                    "kwh_per_100mi":        round(100 / mpge * 33.7, 1),
-                    "range_miles":          round(rng_mi * (1 + noise), 0),
-                    "battery_capacity_kwh": batt,
-                    "msrp_base":            price + int(year - 2019) * 500,
-                    "connector_type":       conn,
-                    "fuel_type":            "Electricity",
-                    "is_phev":              False,
-                    "trany":                "1-Speed Automatic",
-                    "drive":                "Rear-Wheel Drive",
-                    "VClass":               "Compact Cars",
-                    "charge_240v_hrs":      round(batt / 11, 1),
-                    "fast_charge_minutes":  round(batt * 0.4, 0),
-                    "max_ac_kw":            11.0,
-                    "max_dc_kw":            250.0 if make == "Tesla" else 150.0,
-                    "acceleration_0_60":    round(rng.uniform(3.5, 6.5), 1),
-                    "annual_fuel_cost_usd": round(mpge * 0.3 * 15000 / mpge, 0),
-                    "co2_tailpipe_gpm":     0,
-                    "ghg_score":            10,
-                })
+                rows.append(
+                    {
+                        "fueleconomy_id": None,
+                        "year": year,
+                        "make": make,
+                        "model": model,
+                        "combined_mpge": round(mpge * (1 + noise), 1),
+                        "city_mpge": round(mpge * 1.03 * (1 + noise), 1),
+                        "highway_mpge": round(mpge * 0.97 * (1 + noise), 1),
+                        "kwh_per_100mi": round(100 / mpge * 33.7, 1),
+                        "range_miles": round(rng_mi * (1 + noise), 0),
+                        "battery_capacity_kwh": batt,
+                        "msrp_base": price + int(year - 2019) * 500,
+                        "connector_type": conn,
+                        "fuel_type": "Electricity",
+                        "is_phev": False,
+                        "trany": "1-Speed Automatic",
+                        "drive": "Rear-Wheel Drive",
+                        "VClass": "Compact Cars",
+                        "charge_240v_hrs": round(batt / 11, 1),
+                        "fast_charge_minutes": round(batt * 0.4, 0),
+                        "max_ac_kw": 11.0,
+                        "max_dc_kw": 250.0 if make == "Tesla" else 150.0,
+                        "acceleration_0_60": round(rng.uniform(3.5, 6.5), 1),
+                        "annual_fuel_cost_usd": round(mpge * 0.3 * 15000 / mpge, 0),
+                        "co2_tailpipe_gpm": 0,
+                        "ghg_score": 10,
+                    }
+                )
     return pd.DataFrame(rows)
 
 
 def _synthetic_stations(n: int = 5000) -> pd.DataFrame:
     import numpy as np
+
     rng = np.random.default_rng(7)
-    networks = ["ChargePoint Network", "Tesla", "Blink Network",
-                "EVgo Network", "Non-Networked", "Tesla Destination",
-                "Electrify America"]
-    weights  = [0.40, 0.20, 0.10, 0.08, 0.10, 0.07, 0.05]
+    networks = [
+        "ChargePoint Network",
+        "Tesla",
+        "Blink Network",
+        "EVgo Network",
+        "Non-Networked",
+        "Tesla Destination",
+        "Electrify America",
+    ]
+    weights = [0.40, 0.20, 0.10, 0.08, 0.10, 0.07, 0.05]
     # Rough US bounding box
     lats = rng.uniform(25, 49, n)
     lons = rng.uniform(-124, -67, n)
@@ -628,21 +682,23 @@ def _synthetic_stations(n: int = 5000) -> pd.DataFrame:
         network = rng.choice(networks, p=weights)
         l2 = int(rng.integers(1, 12))
         dc = int(rng.integers(0, 6)) if network != "Tesla Destination" else 0
-        rows.append({
-            "station_id":    i + 1,
-            "station_name":  f"{network} Station #{i+1}",
-            "city":          "Various",
-            "state":         "CA",
-            "country":       "US",
-            "latitude":      round(float(lats[i]), 6),
-            "longitude":     round(float(lons[i]), 6),
-            "network":       network,
-            "access_code":   "public",
-            "level1_count":  0,
-            "level2_count":  l2,
-            "dc_fast_count": dc,
-            "connector_types": ["CCS", "J1772"],
-        })
+        rows.append(
+            {
+                "station_id": i + 1,
+                "station_name": f"{network} Station #{i + 1}",
+                "city": "Various",
+                "state": "CA",
+                "country": "US",
+                "latitude": round(float(lats[i]), 6),
+                "longitude": round(float(lons[i]), 6),
+                "network": network,
+                "access_code": "public",
+                "level1_count": 0,
+                "level2_count": l2,
+                "dc_fast_count": dc,
+                "connector_types": ["CCS", "J1772"],
+            }
+        )
     return pd.DataFrame(rows)
 
 
@@ -660,18 +716,12 @@ def _save(df: pd.DataFrame, name: str) -> Path:
 # CLI
 # ══════════════════════════════════════════════════════════════════════════════
 def _parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--nrel-key",      metavar="KEY",
-                   help="NREL API key (free at developer.nlr.gov/signup)")
-    p.add_argument("--start-year",    type=int, default=2019,
-                   help="First model year to collect (default: 2019)")
-    p.add_argument("--include-openev", action="store_true",
-                   help="Download and merge OpenEV Data specs")
-    p.add_argument("--dry-run",       action="store_true",
-                   help="Generate synthetic data only — no network calls")
-    p.add_argument("--country",       default="US",
-                   help="Country code for NREL station pull (default: US)")
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--nrel-key", metavar="KEY", help="NREL API key (free at developer.nlr.gov/signup)")
+    p.add_argument("--start-year", type=int, default=2019, help="First model year to collect (default: 2019)")
+    p.add_argument("--include-openev", action="store_true", help="Download and merge OpenEV Data specs")
+    p.add_argument("--dry-run", action="store_true", help="Generate synthetic data only — no network calls")
+    p.add_argument("--country", default="US", help="Country code for NREL station pull (default: US)")
     return p.parse_args()
 
 
@@ -729,7 +779,7 @@ def main() -> None:
     if not args.dry_run and not nrel_key:
         log.info("  (Run with --nrel-key to collect station data)")
     log.info("")
-    log.info("Next step: python ev_analysis.py")
+    log.info("Next step: python notebooks/ev_analysis.py")
 
 
 if __name__ == "__main__":
