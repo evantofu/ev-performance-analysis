@@ -2,6 +2,9 @@ import { useState, useEffect, useRef } from 'react'
 import { api } from '../api'
 import { useStore } from '../store'
 import { useApi } from '../hooks/useApi'
+import { RequestError } from '../components/RequestError'
+import L from 'leaflet'
+import 'leaflet/dist/leaflet.css'
 
 const CHARGER_COLORS = { dc_fast: '#22c55e', level2: '#3b82f6', level1: '#64748b' }
 
@@ -14,6 +17,7 @@ function stationType(s) {
 async function geocode(query) {
   const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1&countrycodes=us`
   const res  = await fetch(url, { headers: { 'Accept-Language': 'en' } })
+  if (!res.ok) throw new Error('Address lookup failed')
   const data = await res.json()
   if (!data.length) throw new Error('Address not found')
   return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon), label: data[0].display_name }
@@ -21,15 +25,12 @@ async function geocode(query) {
 
 export function ChargersPage() {
   const { stationFilters, setStationFilter } = useStore()
-  const { data: networksData } = useApi(() => api.networks(), [])
+  const { data: networksData, error: networksError } = useApi(signal => api.networks({ signal }), [])
 
-  const [stations,    setStations]    = useState([])
-  const [total,       setTotal]       = useState(0)
-  const [loading,     setLoading]     = useState(false)
+  const [bounds, setBounds] = useState(null)
   const [searchInput, setSearchInput] = useState('')
   const [searchErr,   setSearchErr]   = useState('')
   const [searching,   setSearching]   = useState(false)
-  const [mapReady,    setMapReady]    = useState(false)
 
   const mapRef  = useRef(null)
   const leafRef = useRef(null)
@@ -37,87 +38,33 @@ export function ChargersPage() {
 
   const networks = networksData?.map(n => n.network) ?? []
 
-  const filtersRef = useRef(stationFilters)
-  useEffect(() => { filtersRef.current = stationFilters }, [stationFilters])
+  const { data, loading, error } = useApi(signal => bounds
+    ? api.stations({ ...bounds, ...stationFilters, limit: 2000 }, { signal })
+    : Promise.resolve(null), [JSON.stringify(bounds), JSON.stringify(stationFilters)])
+  const stations = data?.results ?? []
+  const total = data?.total ?? 0
 
-  // ── Fetch stations for current map bounds ──────────────────────────────────
-  function fetchForBounds(map) {
-    const b = map.getBounds()
-    const f = filtersRef.current
-    setLoading(true)
-    api.stations({
-      lat_min: b.getSouth(),
-      lat_max: b.getNorth(),
-      lon_min: b.getWest(),
-      lon_max: b.getEast(),
-      dc_fast_only: f.dc_fast_only,
-      network: f.network ?? undefined,
-      state:   f.state   ?? undefined,
-      limit: 2000,
-    })
-      .then(d => { setStations(d.results ?? []); setTotal(d.total ?? 0) })
-      .finally(() => setLoading(false))
-  }
-
-  // ── Initialise Leaflet ─────────────────────────────────────────────────────
   useEffect(() => {
-    let cancelled = false
-
-    function initMap() {
-      if (cancelled || !mapRef.current) return
-      if (leafRef.current) { leafRef.current.remove(); leafRef.current = null }
-      const L   = window.L
-      const map = L.map(mapRef.current, { center: [39.5, -98.35], zoom: 4 })
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-        attribution: '© OpenStreetMap © CARTO', maxZoom: 19,
-      }).addTo(map)
-
-      map.on('moveend', () => fetchForBounds(map))
-
-      if (!cancelled) {
-        leafRef.current = map
-        setMapReady(true)
-        fetchForBounds(map)
-      }
+    const map = L.map(mapRef.current, { center: [39.5, -98.35], zoom: 4, worldCopyJump: true })
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      attribution: '© OpenStreetMap © CARTO', maxZoom: 19,
+    }).addTo(map)
+    function updateBounds() {
+      const b = map.getBounds()
+      const wrap = value => ((value + 180) % 360 + 360) % 360 - 180
+      const world = b.getEast() - b.getWest() >= 360
+      setBounds({ lat_min: Math.max(-90, b.getSouth()), lat_max: Math.min(90, b.getNorth()),
+        lon_min: world ? -180 : wrap(b.getWest()), lon_max: world ? 180 : wrap(b.getEast()) })
     }
-
-    if (!mapRef.current) return
-
-    if (!window.L) {
-      if (!document.querySelector('link[href*="leaflet"]')) {
-        const link = document.createElement('link')
-        link.rel = 'stylesheet'
-        link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'
-        document.head.appendChild(link)
-      }
-      if (!document.querySelector('script[src*="leaflet"]')) {
-        const script = document.createElement('script')
-        script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'
-        script.onload = () => initMap()
-        document.head.appendChild(script)
-      } else {
-        const poll = setInterval(() => { if (window.L) { clearInterval(poll); initMap() } }, 50)
-      }
-    } else {
-      initMap()
-    }
-
-    return () => {
-      cancelled = true
-      if (leafRef.current) { leafRef.current.remove(); leafRef.current = null }
-    }
+    leafRef.current = map
+    map.on('moveend', updateBounds)
+    updateBounds()
+    return () => { map.remove(); leafRef.current = null }
   }, [])
-
-  // ── Re-fetch when filters change ───────────────────────────────────────────
-  useEffect(() => {
-    if (!mapReady || !leafRef.current) return
-    fetchForBounds(leafRef.current)
-  }, [stationFilters.dc_fast_only, stationFilters.network, stationFilters.state, mapReady])
 
   // ── Update markers ─────────────────────────────────────────────────────────
   useEffect(() => {
-    const L = window.L
-    if (!L || !leafRef.current) return
+    if (!leafRef.current) return
 
     try {
       leafRef.current.eachLayer(l => {
@@ -132,14 +79,16 @@ export function ChargersPage() {
       L.circleMarker([s.latitude, s.longitude], {
         radius: 5, color, fillColor: color, fillOpacity: 0.85, weight: 0.5,
       })
-        .bindPopup(`
-          <strong>${s.station_name || 'Station'}</strong><br>
-          ${s.network || 'Non-Networked'}<br>
-          ${[s.city, s.state].filter(Boolean).join(', ')}<br>
-          L1: ${s.level1_count||0} &nbsp;·&nbsp;
-          L2: ${s.level2_count||0} &nbsp;·&nbsp;
-          DC Fast: ${s.dc_fast_count||0}
-        `)
+        .bindPopup(() => {
+          const content = document.createElement('div')
+          const title = document.createElement('strong')
+          title.textContent = s.station_name || 'Station'
+          content.append(title, document.createElement('br'))
+          content.append(document.createTextNode(`${s.network || 'Non-Networked'} · ${s.city || ''}, ${s.state || ''}`))
+          content.append(document.createElement('br'), document.createTextNode(
+            `L1: ${s.level1_count || 0} · L2: ${s.level2_count || 0} · DC Fast: ${s.dc_fast_count || 0}`))
+          return content
+        })
         .addTo(leafRef.current)
     })
   }, [stations])
@@ -157,7 +106,7 @@ export function ChargersPage() {
         const L = window.L
         pinRef.current = L.circleMarker([lat, lon], {
           radius: 8, color: '#f5a623', fillColor: '#f5a623', fillOpacity: 1, weight: 2,
-        }).bindPopup(`<strong>📍 ${label.split(',')[0]}</strong>`).addTo(leafRef.current)
+        }).bindPopup(() => { const el = document.createElement('strong'); el.textContent = label.split(',')[0]; return el }).addTo(leafRef.current)
       }
     } catch {
       setSearchErr('Address not found — try a city name or zip code.')
@@ -181,7 +130,8 @@ export function ChargersPage() {
 
   return (
     <div className="page">
-      <div style={{ display: 'grid', gridTemplateColumns: '240px 1fr', gap: 20 }}>
+      <RequestError error={error || networksError} />
+      <div className="tool-layout chargers-layout">
 
         {/* Sidebar */}
         <div className="filter-panel">

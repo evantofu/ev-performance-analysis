@@ -390,3 +390,12 @@ body {
 .stagger-2 { animation-delay: 0.08s; opacity: 0; }
 .stagger-3 { animation-delay: 0.12s; opacity: 0; }
 .stagger-4 { animation-delay: 0.16s; opacity: 0; }
+/* Shared tool layouts keep filters usable on smaller screens. */
+.tool-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 20px; align-items: start; }
+.chargers-layout { grid-template-columns: 240px minmax(0, 1fr); }
+.operating-cost { display: inline-block; color: var(--text-muted); font-size: 11px; }
+.request-error { color: var(--red); padding: 12px; border: 1px solid currentColor; border-radius: 6px; }
+[role="button"]:focus-visible { outline: 2px solid var(--terra); outline-offset: 3px; }
+@media (max-width: 760px) {
+  .tool-layout, .chargers-layout { grid-template-columns: minmax(0, 1fr); }
+}

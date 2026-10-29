@@ -1,13 +1,13 @@
 import { Link } from 'react-router-dom'
 import { api } from '../api'
 import { useApi } from '../hooks/useApi'
+import { RequestError } from '../components/RequestError'
 
 export function HomePage() {
-  const { data: summary } = useApi(() => api.summary(), [])
-  const { data: segData }  = useApi(() => api.segments(), [])
+  const { data: summary, error } = useApi(signal => api.summary({ signal }), [])
 
   const kpis = [
-    { label: 'Current EV models',  value: summary?.total_vehicles?.toLocaleString(), unit: '' },
+    { label: 'BEV model-year / trim records',  value: summary?.total_vehicles?.toLocaleString(), unit: '' },
     { label: 'Manufacturers',      value: summary?.total_manufacturers,               unit: '' },
     { label: 'Avg range',          value: summary?.avg_range_miles,                   unit: 'mi' },
     { label: 'Avg efficiency',     value: summary?.avg_mpge,                          unit: 'MPGe' },
@@ -19,19 +19,19 @@ export function HomePage() {
     {
       to: '/compare',
       title: 'Compare EVs',
-      desc: 'Browse and filter every current EV by range, efficiency, and manufacturer. Select two to compare head-to-head.',
-      tag: '1,200+ vehicles',
+      desc: 'Browse and filter EPA-listed EV records by range, efficiency, and manufacturer. Select two to compare head-to-head.',
+      tag: 'EPA snapshot',
     },
     {
       to: '/chargers',
       title: 'Find Chargers',
       desc: 'Interactive map of 80,000+ US charging stations. Pan to explore — stations load as you move.',
-      tag: '80k stations',
+      tag: 'AFDC snapshot',
     },
     {
       to: '/segments',
       title: 'Market Segments',
-      desc: 'Four buyer profiles — High Efficiency, Mainstream, Long Range, and Performance. Find your fit.',
+      desc: 'Four descriptive groups based on efficiency and range. Find your fit.',
       tag: '4 profiles',
     },
     {
@@ -44,6 +44,7 @@ export function HomePage() {
 
   return (
     <div className="page">
+      <RequestError error={error} />
       {/* Hero */}
       <div style={{ marginBottom: 40, paddingTop: 8 }}>
         <div style={{
@@ -56,7 +57,7 @@ export function HomePage() {
           <span style={{ color: 'var(--terra)' }}>electric vehicle.</span>
         </div>
         <p style={{ color: 'var(--text-muted)', fontSize: 15, maxWidth: 480, lineHeight: 1.7 }}>
-          Real EPA data. 80,000 charging stations. Built for people
+          EPA vehicle records and AFDC charging locations. Built for people
           who want honest answers, not marketing copy.
         </p>
       </div>
@@ -96,7 +97,7 @@ export function HomePage() {
       </div>
 
       <p style={{ marginTop: 32, fontSize: 11, color: 'var(--text-dim)', textAlign: 'center' }}>
-        Vehicle data: EPA fueleconomy.gov · Station data: NREL AFDC ·
+        Snapshot: {summary?.snapshot_date ?? 'bundled data'} · Vehicle data: EPA fueleconomy.gov · Station data: NREL AFDC ·
         Segmentation: quantile cuts on deduplicated base models
       </p>
     </div>

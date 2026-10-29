@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { PlotlyChart } from '../components/PlotlyChart'
 import { api } from '../api'
 import { useApi } from '../hooks/useApi'
+import { RequestError } from '../components/RequestError'
 
 const PALETTE = [
   '#f5a623','#22c55e','#3b82f6','#ef4444','#a855f7',
@@ -11,7 +12,7 @@ const PALETTE = [
 ]
 
 export function TrendsPage() {
-  const { data: raw, loading } = useApi(() => api.trends(), [])
+  const { data: raw, loading, error } = useApi(signal => api.trends({ signal }), [])
 
   // top5Mode: true  → highlight top-5 preset (no explicit set needed)
   // top5Mode: false → use `selected` set exclusively
@@ -55,7 +56,7 @@ export function TrendsPage() {
     return { traces, makes }
   }, [raw, top5Mode, selected])
 
-  function toggleMake(make, makeIndex) {
+  function toggleMake(make) {
     if (top5Mode) {
       // Leaving top5Mode: seed the explicit set from current top-5,
       // then toggle this make in/out of that set.
@@ -90,9 +91,9 @@ export function TrendsPage() {
   const layout = {
     paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
     font: { family: 'DM Mono, monospace', color: '#7a7670', size: 11 },
-    xaxis: { title: 'Year', gridcolor: '#ebe5de', zerolinecolor: '#ebe5de',
+    xaxis: { title: { text: 'Year' }, gridcolor: '#ebe5de', zerolinecolor: '#ebe5de',
              tickmode: 'linear', dtick: 1 },
-    yaxis: { title: 'Average MPGe', gridcolor: '#ebe5de', zerolinecolor: '#ebe5de' },
+    yaxis: { title: { text: 'Average MPGe' }, gridcolor: '#ebe5de', zerolinecolor: '#ebe5de' },
     legend: {
       bgcolor: 'rgba(255,255,255,0.95)', bordercolor: '#ebe5de',
       borderwidth: 1, font: { size: 10 },
@@ -103,6 +104,7 @@ export function TrendsPage() {
 
   return (
     <div className="page">
+      <RequestError error={error} />
       <div className="section-header">
         <h2>Manufacturer Efficiency Trends</h2>
       </div>
@@ -158,7 +160,7 @@ export function TrendsPage() {
       </div>
 
       <p style={{ fontSize: 10, color: 'var(--text-muted)', maxWidth: 640 }}>
-        BEV-only · consumer passenger vehicles · ≥4 years of data · R²≥0.3 quality gate.
+        BEV-only · consumer passenger vehicles · ≥4 years of data · R²≥0.3 in-sample fit filter; this does not measure predictive accuracy.
         Downward trends may reflect lineup expansion into larger variants rather than
         genuine efficiency regression. Top 20 by latest average MPGe shown.
       </p>

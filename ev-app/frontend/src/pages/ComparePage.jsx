@@ -1,10 +1,11 @@
-import { useState, useEffect } from 'react'
+import { useMemo } from 'react'
 import { PlotlyChart } from '../components/PlotlyChart'
 import { api } from '../api'
 import { useStore } from '../store'
 import { MakeGrid } from '../components/MakeGrid'
 import { ComparePanel } from '../components/ComparePanel'
 import { useApi } from '../hooks/useApi'
+import { RequestError } from '../components/RequestError'
 
 const SORT_OPTIONS = [
   { value: 'combined_mpge', label: 'Efficiency' },
@@ -16,7 +17,7 @@ const SEG_COLORS = {
   0: '#2E86AB', 1: '#A23B72', 2: '#06A77D', 3: '#C73E1D',
 }
 const SEG_NAMES = {
-  0: 'High Efficiency', 1: 'Mainstream', 2: 'Long Range', 3: 'Performance & SUV',
+  0: 'High Efficiency', 1: 'Mainstream', 2: 'Longer Range', 3: 'Lower Efficiency',
 }
 
 function similarity(a, b) {
@@ -27,60 +28,42 @@ function similarity(a, b) {
 
 export function ComparePage() {
   const { filters, setFilter, resetFilters, selected } = useStore()
-  const { data: makesData } = useApi(() => api.makes(), [])
-
-  // Single fetch — all vehicles matching current filters, no pagination
-  const [vehicles, setVehicles] = useState([])
-  const [loading,  setLoading]  = useState(true)
+  const { data: makesData, error: makesError } = useApi(signal => api.makes({ signal }), [])
 
   // Scatter dataset — respects year filter but not other filters
   // so you always see the full market context
   const scatterParams = { limit: 2000, sort_by: 'combined_mpge',
                           year: filters.year || null }
-  const { data: allData } = useApi(
-    () => api.vehicles(scatterParams), [filters.year]
+  const { data: allData, error: scatterError } = useApi(
+    signal => api.vehicles(scatterParams, { signal }), [filters.year]
   )
   const allVehicles = allData?.results ?? []
 
-  const [similar, setSimilar] = useState([])
   const makes = makesData?.map(m => m.make) ?? []
 
-  // Fetch ALL matching vehicles on filter change (no pagination)
-  useEffect(() => {
-    setLoading(true)
-    const params = {
-      make:        filters.make        || null,
-      min_range:   filters.min_range   || null,
-      min_mpge:    filters.min_mpge    || null,
-      year:        filters.year        || null,
-      sort_by:     filters.sort_by,
-      sort_desc:   filters.sort_by !== 'msrp_base',
-      has_battery: filters.full_specs  ? true : null,
-      min_year:    filters.current_only ? new Date().getFullYear() : null,
-      limit:       2000,
-    }
-    api.vehicles(params)
-      .then(d => setVehicles(d.results ?? []))
-      .finally(() => setLoading(false))
-  }, [JSON.stringify(filters)])
+  const { data: vehicleData, loading, error } = useApi(signal => api.vehicles({
+    make: filters.make, min_range: filters.min_range, min_mpge: filters.min_mpge,
+    year: filters.year, sort_by: filters.sort_by, sort_desc: true,
+    has_battery: filters.full_specs ? true : null,
+    min_year: filters.current_only ? new Date().getFullYear() : null, limit: 2000,
+  }, { signal }), [JSON.stringify(filters)])
+  const vehicles = vehicleData?.results ?? []
 
-  // Similar vehicles when exactly 1 selected
-  useEffect(() => {
-    if (selected.length !== 1 || allVehicles.length === 0) { setSimilar([]); return }
+  const similar = useMemo(() => {
+    if (selected.length !== 1 || allVehicles.length === 0) return []
     const anchor = selected[0]
-    const scored = allVehicles
+    return allVehicles
       .filter(v => v.id !== anchor.id)
       .map(v => ({ ...v, _dist: similarity(anchor, v) }))
       .sort((a, b) => a._dist - b._dist)
       .slice(0, 6)
-    setSimilar(scored)
   }, [selected, allVehicles])
 
   // Scatter — all vehicles coloured by segment
   const segIds = [...new Set(allVehicles.map(v => v.cluster).filter(c => c != null))].sort()
   const scatterTraces = segIds.length > 0
     ? segIds.map(cid => {
-        const sv = allVehicles.filter(v => Math.round(v.cluster) === cid)
+        const sv = allVehicles.filter(v => v.cluster != null && Math.round(v.cluster) === cid)
         return {
           type: 'scatter', mode: 'markers',
           name: SEG_NAMES[cid] ?? `Seg ${cid}`,
@@ -104,8 +87,8 @@ export function ComparePage() {
   const plotLayout = {
     paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
     font: { family: 'Inter, system-ui, sans-serif', color: '#7a7670', size: 11 },
-    xaxis: { title: 'Efficiency (MPGe)', gridcolor: '#ebe5de', zerolinecolor: '#ebe5de' },
-    yaxis: { title: 'Range (miles)',      gridcolor: '#ebe5de', zerolinecolor: '#ebe5de' },
+    xaxis: { title: { text: 'Efficiency (MPGe)' }, gridcolor: '#ebe5de', zerolinecolor: '#ebe5de' },
+    yaxis: { title: { text: 'Range (miles)' },      gridcolor: '#ebe5de', zerolinecolor: '#ebe5de' },
     legend: { bgcolor: 'rgba(255,255,255,0.95)', bordercolor: '#e0d8d0',
               borderwidth: 1, font: { size: 10 }, orientation: 'h', y: -0.32 },
     margin: { l: 48, r: 16, t: 16, b: 110 },
@@ -121,8 +104,8 @@ export function ComparePage() {
 
   return (
     <div className="page">
-      <div style={{ display: 'grid', gridTemplateColumns: '220px 1fr',
-                    gap: 20, alignItems: 'start' }}>
+      <RequestError error={error || makesError || scatterError} />
+      <div className="tool-layout compare-layout">
 
         {/* Sidebar */}
         <div className="filter-panel">
@@ -183,7 +166,7 @@ export function ComparePage() {
               <input type="checkbox"
                 checked={filters.current_only ?? false}
                 onChange={e => setFilter('current_only', e.target.checked || null)} />
-              Current models only
+              This model year and newer
             </label>
             <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 4 }}>
               {new Date().getFullYear()} and newer
@@ -195,10 +178,10 @@ export function ComparePage() {
               <input type="checkbox"
                 checked={filters.full_specs ?? false}
                 onChange={e => setFilter('full_specs', e.target.checked || null)} />
-              Full specs only
+              Battery data available
             </label>
             <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 4 }}>
-              Battery &amp; charging data available
+              Some additional specifications may still be missing
             </div>
           </div>
 
