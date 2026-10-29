@@ -189,3 +189,8 @@ data/raw/*.csv
 outputs/figures/
 
 # Keep all processed_data/ for Railway deployment
+# Local tools and test output
+anaconda_projects/
+.ruff_cache/
+ev-app/frontend/test-results/
+ev-app/frontend/playwright-report/
